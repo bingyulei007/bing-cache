@@ -1,0 +1,73 @@
+package com.bing.cache.cache;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.Objects;
+
+/**
+ * 缓存失效通知监听器.
+ *
+ * <p>接收 Redis Pub/Sub 广播的缓存失效消息，
+ * 并对本地 L1 (Caffeine) 缓存执行相应的驱逐或清除操作。</p>
+ */
+public class CacheInvalidationListener {
+
+  private static final Logger LOG = LoggerFactory.getLogger(CacheInvalidationListener.class);
+
+  private final CaffeineCacheManager l1CacheManager;
+
+  private final String instanceId;
+
+  /**
+   * 构造方法.
+   *
+   * @param l1CacheManager 本地 L1 缓存管理器
+   * @param instanceId     当前实例的唯一标识，用于过滤自己发出的消息
+   */
+  public CacheInvalidationListener(CaffeineCacheManager l1CacheManager,
+      String instanceId) {
+    this.l1CacheManager = l1CacheManager;
+    this.instanceId = instanceId;
+  }
+
+  /**
+   * 处理接收到的缓存失效消息.
+   *
+   * <p>由 {@link org.springframework.data.redis.listener.adapter.MessageListenerAdapter}
+   * 通过反射调用，方法名需与适配器配置一致。</p>
+   *
+   * <p>过滤掉自己实例发出的消息，避免重复清除本地缓存。</p>
+   *
+   * @param messageJson 消息 JSON 字符串
+   */
+  public void handleMessage(String messageJson) {
+    try {
+      CacheInvalidationMessage message = CacheInvalidationMessage.fromJson(messageJson);
+      if (Objects.equals(instanceId, message.getInstanceId())) {
+        LOG.debug("Ignoring self-published cache invalidation: type={}, key={}",
+            message.getType(), message.getKey());
+        return;
+      }
+      switch (message.getType()) {
+        case EVICT:
+          l1CacheManager.evict(message.getKey());
+          LOG.debug("Received cache invalidation: EVICT key={}", message.getKey());
+          break;
+        case CLEAR:
+          l1CacheManager.clear();
+          LOG.debug("Received cache invalidation: CLEAR");
+          break;
+        case CLEAR_PREFIX:
+          l1CacheManager.clearByPrefix(message.getKey());
+          LOG.debug("Received cache invalidation: CLEAR_PREFIX prefix={}", message.getKey());
+          break;
+        default:
+          LOG.warn("Unknown cache invalidation type: {}", message.getType());
+          break;
+      }
+    } catch (Exception e) {
+      LOG.error("Failed to process cache invalidation message: {}", messageJson, e);
+    }
+  }
+}

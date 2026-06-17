@@ -1,0 +1,280 @@
+package com.bing.cache.config;
+
+import com.bing.cache.aspect.CacheAspect;
+import com.bing.cache.aspect.CacheEvictAspect;
+import com.bing.cache.cache.CacheInvalidationListener;
+import com.bing.cache.cache.CacheInvalidationPublisher;
+import com.bing.cache.cache.CacheManager;
+import com.bing.cache.cache.CacheReconciliationService;
+import com.bing.cache.cache.CacheVersionStore;
+import com.bing.cache.cache.CaffeineCacheManager;
+import com.bing.cache.cache.CompositeCacheManager;
+import com.bing.cache.cache.RedisCacheInvalidationPublisher;
+import com.bing.cache.cache.RedisCacheManager;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.data.redis.connection.RedisConnectionFactory;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.listener.PatternTopic;
+import org.springframework.data.redis.listener.RedisMessageListenerContainer;
+import org.springframework.data.redis.listener.adapter.MessageListenerAdapter;
+import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSerializer;
+import org.springframework.data.redis.serializer.StringRedisSerializer;
+
+import java.util.UUID;
+
+/**
+ * Bing Cache 自动配置类.
+ *
+ * <p>根据 classpath 和配置条件自动装配缓存组件：</p>
+ * <ul>
+ *   <li>Caffeine 在 classpath 且 Redis 不可用时：仅 L1 本地缓存</li>
+ *   <li>Caffeine + Redis 在 classpath 且 {@code bing.cache.redis.enabled=true} 时：L1+L2 二级缓存</li>
+ * </ul>
+ *
+ * <p>用户可通过自定义 {@link CacheManager} Bean 覆盖默认实现。</p>
+ */
+@Configuration
+@EnableConfigurationProperties(BingCacheProperties.class)
+public class BingCacheAutoConfiguration {
+
+  private static final Logger LOG = LoggerFactory.getLogger(BingCacheAutoConfiguration.class);
+
+  /**
+   * 注册当前实例的唯一标识，用于 Pub/Sub 消息的自发自滤.
+   *
+   * <p>Publisher 发送消息时携带此 ID，Listener 收到后过滤掉自己发出的消息，
+   * 避免本地缓存被重复清除。</p>
+   *
+   * @return 实例唯一标识
+   */
+  @Bean("bingCacheInstanceId")
+  public String bingCacheInstanceId() {
+    return UUID.randomUUID().toString();
+  }
+
+  /**
+   * 注册 L1+L2 组合缓存管理器（Redis 连接可用且启用时优先）.
+   *
+   * <p>当 classpath 中存在 Redis 连接且 {@code bing.cache.redis.enabled=true}（默认）时，
+   * 优先使用 L1(Caffeine) + L2(Redis) 二级缓存模式。</p>
+   *
+   * @param stringRedisTemplate    Redis 字符串操作模板
+   * @param bingCacheRedisTemplate Redis 对象操作模板
+   * @param properties             缓存配置属性
+   * @param bingCacheInstanceId    实例唯一标识
+   * @return CompositeCacheManager 实例
+   */
+  @Bean("cacheManager")
+  @ConditionalOnMissingBean(CacheManager.class)
+  @ConditionalOnBean(RedisConnectionFactory.class)
+  @ConditionalOnProperty(prefix = "bing.cache.redis", name = "enabled",
+      havingValue = "true", matchIfMissing = true)
+  public CacheManager compositeCacheManager(
+      StringRedisTemplate stringRedisTemplate,
+      RedisTemplate<String, Object> bingCacheRedisTemplate,
+      BingCacheProperties properties,
+      String bingCacheInstanceId) {
+    CaffeineCacheManager l1CacheManager = new CaffeineCacheManager(
+        properties.getCaffeine().getMaxSize(),
+        properties.getCaffeine().getL1MaxTtl());
+    RedisCacheManager l2CacheManager = new RedisCacheManager(
+        bingCacheRedisTemplate, properties.getRedis().getKeyPrefix());
+    CacheInvalidationPublisher publisher = new RedisCacheInvalidationPublisher(
+        stringRedisTemplate, properties.getRedis().getChannelName(), bingCacheInstanceId);
+
+    // 版本对账（默认启用）
+    CacheVersionStore versionStore = null;
+    if (properties.getReconciliation().isEnabled()) {
+      versionStore = new CacheVersionStore(stringRedisTemplate,
+          properties.getRedis().getKeyPrefix() + "version:");
+    }
+
+    CompositeCacheManager composite = new CompositeCacheManager(
+        l1CacheManager, l2CacheManager, publisher, versionStore);
+
+    // Redis 恢复时清空 L1 脏数据
+    l2CacheManager.setRecoveryCallback(l1CacheManager::clear);
+
+    LOG.info("Bing Cache: L1 (Caffeine) + L2 (Redis) composite mode enabled"
+        + ", reconciliation={}, l1MaxTtl={}s",
+        properties.getReconciliation().isEnabled(),
+        properties.getCaffeine().getL1MaxTtl());
+
+    return composite;
+  }
+
+  /**
+   * 注册纯 Caffeine 缓存管理器（Redis 不可用或禁用时的回退方案）.
+   *
+   * <p>当 Redis 连接不可用或 {@code bing.cache.redis.enabled=false} 时，
+   * 通过 {@code @ConditionalOnMissingBean} 回退到纯 L1 本地缓存模式。</p>
+   *
+   * @param properties 缓存配置属性
+   * @return CacheManager 实例
+   */
+  @Bean("cacheManager")
+  @ConditionalOnMissingBean(CacheManager.class)
+  public CacheManager caffeineCacheManager(BingCacheProperties properties) {
+    LOG.info("Bing Cache: L1 (Caffeine) only mode, l1MaxTtl={}s",
+        properties.getCaffeine().getL1MaxTtl());
+    return new CaffeineCacheManager(
+        properties.getCaffeine().getMaxSize(),
+        properties.getCaffeine().getL1MaxTtl());
+  }
+
+  /**
+   * 注册缓存切面.
+   *
+   * @param cacheManager 缓存管理器
+   * @return CacheAspect 实例
+   */
+  @Bean
+  @ConditionalOnMissingBean
+  public CacheAspect cacheAspect(CacheManager cacheManager) {
+    return new CacheAspect(cacheManager);
+  }
+
+  /**
+   * 注册缓存清除切面.
+   *
+   * @param cacheManager 缓存管理器
+   * @return CacheEvictAspect 实例
+   */
+  @Bean
+  @ConditionalOnMissingBean
+  public CacheEvictAspect cacheEvictAspect(CacheManager cacheManager) {
+    return new CacheEvictAspect(cacheManager);
+  }
+
+  /**
+   * Redis 相关 Bean 配置.
+   *
+   * <p>仅在 Redis 连接可用且启用时激活，注册专用 RedisTemplate、
+   * Pub/Sub 监听器、版本对账服务等组件。</p>
+   */
+  @Configuration
+  @ConditionalOnBean(RedisConnectionFactory.class)
+  @ConditionalOnProperty(prefix = "bing.cache.redis", name = "enabled",
+      havingValue = "true", matchIfMissing = true)
+  static class RedisConfiguration {
+
+    private static final Logger REDIS_LOG = LoggerFactory.getLogger(RedisConfiguration.class);
+
+    /**
+     * 注册 Bing Cache 专用的 RedisTemplate.
+     *
+     * <p>key 使用 StringRedisSerializer，value 使用 GenericJackson2JsonRedisSerializer
+     * （带 @class 类型信息，确保反序列化时类型正确）。</p>
+     *
+     * @param connectionFactory Redis 连接工厂
+     * @return RedisTemplate 实例
+     */
+    @Bean("bingCacheRedisTemplate")
+    @ConditionalOnMissingBean(name = "bingCacheRedisTemplate")
+    public RedisTemplate<String, Object> bingCacheRedisTemplate(
+        RedisConnectionFactory connectionFactory) {
+      RedisTemplate<String, Object> template = new RedisTemplate<>();
+      template.setConnectionFactory(connectionFactory);
+      template.setKeySerializer(new StringRedisSerializer());
+      template.setValueSerializer(new GenericJackson2JsonRedisSerializer());
+      template.setHashKeySerializer(new StringRedisSerializer());
+      template.setHashValueSerializer(new GenericJackson2JsonRedisSerializer());
+      template.afterPropertiesSet();
+      return template;
+    }
+
+    /**
+     * 注册缓存失效消息监听器.
+     *
+     * <p>监听器需要获取 CompositeCacheManager 内部的 CaffeineCacheManager，
+     * 通过 CompositeCacheManager 暴露的 L1 访问器获取。</p>
+     *
+     * @param cacheManager 缓存管理器（CompositeCacheManager 实例）
+     * @return CacheInvalidationListener 实例
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public CacheInvalidationListener cacheInvalidationListener(CacheManager cacheManager,
+        String bingCacheInstanceId) {
+      CaffeineCacheManager l1;
+      if (cacheManager instanceof CompositeCacheManager composite) {
+        l1 = composite.getL1CacheManager();
+      } else {
+        // 非 Composite 模式下不应创建此 bean，但作为防御性处理
+        l1 = (CaffeineCacheManager) cacheManager;
+      }
+      return new CacheInvalidationListener(l1, bingCacheInstanceId);
+    }
+
+    /**
+     * 注册 Redis Pub/Sub 消息监听容器.
+     *
+     * <p>订阅缓存失效频道，收到消息后调用
+     * {@link CacheInvalidationListener#handleMessage(String)} 处理。</p>
+     *
+     * @param connectionFactory Redis 连接工厂
+     * @param properties        缓存配置属性
+     * @param listener          缓存失效监听器
+     * @return RedisMessageListenerContainer 实例
+     */
+    @Bean("bingCacheInvalidationListenerContainer")
+    @ConditionalOnMissingBean(name = "bingCacheInvalidationListenerContainer")
+    public RedisMessageListenerContainer bingCacheInvalidationListenerContainer(
+        RedisConnectionFactory connectionFactory,
+        BingCacheProperties properties,
+        CacheInvalidationListener listener) {
+      RedisMessageListenerContainer container = new RedisMessageListenerContainer();
+      container.setConnectionFactory(connectionFactory);
+      MessageListenerAdapter adapter = new MessageListenerAdapter(listener, "handleMessage");
+      container.addMessageListener(adapter,
+          new PatternTopic(properties.getRedis().getChannelName()));
+      REDIS_LOG.info("Bing Cache: Redis Pub/Sub listener registered on channel: {}",
+          properties.getRedis().getChannelName());
+      return container;
+    }
+
+    /**
+     * 注册版本对账服务.
+     *
+     * <p>仅在 Redis 可用且对账启用时注册。
+     * 服务随 Spring 容器生命周期自动启停。</p>
+     *
+     * @param stringRedisTemplate Redis 字符串操作模板
+     * @param cacheManager         缓存管理器
+     * @param properties           缓存配置属性
+     * @return CacheReconciliationService 实例
+     */
+    @Bean
+    @ConditionalOnProperty(prefix = "bing.cache.reconciliation", name = "enabled",
+        havingValue = "true", matchIfMissing = true)
+    @ConditionalOnMissingBean
+    public CacheReconciliationService cacheReconciliationService(
+        StringRedisTemplate stringRedisTemplate,
+        CacheManager cacheManager,
+        BingCacheProperties properties) {
+      CaffeineCacheManager l1;
+      if (cacheManager instanceof CompositeCacheManager composite) {
+        l1 = composite.getL1CacheManager();
+      } else {
+        l1 = (CaffeineCacheManager) cacheManager;
+      }
+      CacheVersionStore versionStore = new CacheVersionStore(stringRedisTemplate,
+          properties.getRedis().getKeyPrefix() + "version:");
+      CacheReconciliationService service = new CacheReconciliationService(
+          versionStore, l1, properties.getReconciliation().getInterval());
+      REDIS_LOG.info("Bing Cache: Reconciliation service configured, interval={}s",
+          properties.getReconciliation().getInterval());
+      return service;
+    }
+  }
+}

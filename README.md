@@ -1,0 +1,541 @@
+# Bing Cache
+
+基于 Spring AOP 的方法级缓存组件，通过注解实现透明的数据缓存，支持 L1 本地缓存（Caffeine）和 L2 分布式缓存（Redis）两级架构。
+
+## 特性
+
+- **注解驱动**：`@BingCache` 缓存读取、`@BingCacheEvict` 缓存清除，零侵入业务代码
+- **两级缓存**：L1(Caffeine) + L2(Redis) 组合，L1 未命中自动回填并携带 L2 剩余 TTL
+- **跨实例失效**：基于 Redis Pub/Sub 广播缓存失效消息，多实例部署时 L1 缓存自动同步
+- **版本对账**：定时检查 Redis 版本号变化，补偿 Pub/Sub 消息丢失，确保最终一致性
+- **自动降级**：Redis 不可用时自动回退纯 L1 本地缓存模式，恢复后自动清理 L1 脏数据
+- **L1 存活限制**：`l1-max-ttl` 限制 L1 条目最大存活时间，作为 Pub/Sub 丢失的兜底保障
+- **null 值防穿透**：`cacheNullValue` 属性支持缓存 null 结果，防止缓存穿透
+- **确定性 Key**：基于 Jackson 序列化生成 key，不依赖 `toString()`，重启后保持一致
+- **自动装配**：Spring Boot Starter 一键引入，根据 classpath 和配置自动选择缓存模式
+
+## 快速开始
+
+### 1. 引入依赖
+
+在项目的 `pom.xml` 中添加：
+
+```xml
+<dependency>
+  <groupId>cn.com.bingbing</groupId>
+  <artifactId>bing-cache</artifactId>
+  <version>1.0-SNAPSHOT</version>
+</dependency>
+```
+
+组件通过 `AutoConfiguration.imports` 自动装配，无需手动配置。
+
+### 2. 使用缓存注解
+
+```java
+@Service
+public class DictService {
+
+  // 缓存查询结果，1 小时过期
+  @BingCache(expireTime = 3600)
+  public List<DictVO> getDictList(String dictType) {
+    return dictMapper.selectByType(dictType);
+  }
+
+  // 更新数据后清除缓存
+  @BingCacheEvict(cacheName = "dict", argIndexes = {0})
+  public void updateDict(String dictType, DictVO vo) {
+    dictMapper.update(vo);
+  }
+}
+```
+
+## 注解详解
+
+### @BingCache — 缓存读取
+
+标注在查询方法上，方法首次执行后缓存结果，后续调用直接返回缓存值。
+
+| 属性 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `cacheName` | String | `""` | 缓存名称，用于与 `@BingCacheEvict` 共享同一前缀，优先级最高 |
+| `keyPrefix` | String | `""` | 缓存 key 前缀，为空时使用"类全限定名.方法名"；`cacheName` 不为空时忽略 |
+| `expireTime` | int | `0` | 过期时间（秒），`0` 表示不过期 |
+| `argIndexes` | int[] | `{}` | 参与 key 生成的参数索引，空数组表示全部参数参与 |
+| `cacheNullValue` | boolean | `false` | 是否缓存 null 结果，设为 `true` 可防止缓存穿透 |
+
+#### cacheName 与 keyPrefix 怎么选？
+
+两者功能上都能自定义缓存 key 前缀，区别在于**语义和使用场景**：
+
+| | cacheName | keyPrefix |
+|---|---|---|
+| **语义** | "我的缓存叫什么名字" | "我的 key 前缀长什么样" |
+| **适用场景** | 需要 `@BingCacheEvict` 配对清除的缓存 | 只需自定义前缀、不需要配对清除的缓存 |
+| **配对清除** | `@BingCacheEvict(cacheName = "user")` 天然配对 | 也能配对，但语义不明确 |
+| **优先级** | 高（cacheName 不为空时 keyPrefix 被忽略） | 低 |
+
+**简单原则：**
+- **需要缓存清除**（读 + 写/删配对）→ 用 `cacheName`
+- **只需要缓存、不需要清除** → 用 `keyPrefix` 缩短前缀，或不设置用默认前缀
+
+> 注意：`cacheName` 和 `keyPrefix` 同时设置时，只有 `cacheName` 生效。
+
+#### 使用示例
+
+```java
+// ========== cacheName 场景：需要配对清除 ==========
+
+// 查询 — 缓存结果
+@BingCache(cacheName = "user", expireTime = 300)
+public UserVO getUserById(Long id) { ... }
+// key: user([1])
+
+// 更新 — 清除对应缓存（cacheName 相同即可匹配）
+@BingCacheEvict(cacheName = "user", argIndexes = {0})
+public void updateUser(Long id, UserVO vo) { ... }
+// evict key: user([1]) ✓ 匹配
+
+// ========== keyPrefix 场景：只缓存不清除 ==========
+
+// 默认前缀太长（com.example.DictService.getDictList），缩短一下
+@BingCache(keyPrefix = "dict", expireTime = 3600)
+public List<DictVO> getDictList(String dictType) { ... }
+// key: dict([sys_config])
+
+// 不过期的静态数据，只需缓存，不需要清除
+@BingCache(keyPrefix = "config:sys")
+public SystemConfigVO getSystemConfig() { ... }
+
+// ========== 其他用法 ==========
+
+// 基础用法 — 不设置前缀，key 前缀为类名.方法名
+@BingCache(expireTime = 3600)
+public List<DictVO> getDictList(String dictType) { ... }
+
+// 缓存 null 结果，防止缓存穿透
+@BingCache(cacheName = "user", expireTime = 60, cacheNullValue = true)
+public UserVO getUserById(Long id) { ... }
+```
+
+### @BingCacheEvict — 缓存清除
+
+标注在更新/删除方法上，方法执行后（或执行前）自动清除对应的缓存条目。
+
+| 属性 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `cacheName` | String | `""` | 缓存名称，需与 `@BingCache` 的 `cacheName` 一致才能匹配 |
+| `keyPrefix` | String | `""` | 缓存 key 前缀，同 `@BingCache`；`cacheName` 不为空时忽略 |
+| `argIndexes` | int[] | `{}` | 参与 key 生成的参数索引，需与 `@BingCache` 的 `argIndexes` 对应 |
+| `allEntries` | boolean | `false` | `true` 时清除所有缓存：有 cacheName/keyPrefix 时只清除该前缀下的缓存；都没有时清空全部缓存 |
+| `beforeInvocation` | boolean | `false` | `true` 时在方法执行前清除缓存；默认方法成功后才清除 |
+
+> **cacheName 与 keyPrefix 选择原则同 `@BingCache`**：推荐用 `cacheName` 配对，语义更明确。`cacheName` 不为空时 `keyPrefix` 被忽略。
+
+#### 使用示例
+
+```java
+// 更新后清除指定缓存（cacheName 与 @BingCache 对应）
+@BingCacheEvict(cacheName = "user:detail")
+public void updateUser(Long id, UserVO vo) { ... }
+
+// 删除后清除指定缓存（只取 id 生成 key，与查询方法的 key 匹配）
+@BingCacheEvict(cacheName = "user:detail", argIndexes = {0})
+public void deleteUser(Long id) { ... }
+
+// 方法执行前清除缓存（即使方法抛异常，缓存也会被清除）
+@BingCacheEvict(cacheName = "user:detail", beforeInvocation = true)
+public void forceUpdateUser(Long id, UserVO vo) { ... }
+
+// 清空指定 cacheName 下的所有缓存
+@BingCacheEvict(cacheName = "user:detail", allEntries = true)
+public void refreshAllUsers() { ... }
+
+// 清空全部缓存（不指定 cacheName/keyPrefix）
+@BingCacheEvict(allEntries = true)
+public void clearAllCache() { ... }
+```
+
+### @BingCache 与 @BingCacheEvict 配对使用
+
+`cacheName` 是两个注解之间的桥梁——只要 `cacheName` 相同，清除操作就能精准匹配缓存条目。
+
+**⚠️ 重要：argIndexes 必须对应**
+
+缓存 key 由前缀 + 参数共同生成。如果查询方法只用 `id` 生成 key（key 为 `user([1])`），而更新方法有两个参数 `id` 和 `vo` 但不加 `argIndexes`，生成的 key 会是 `user([1,{"id":1,"name":"Alice"}])`——和查询的 key 不匹配，evict 清不到缓存！
+
+**必须用 `argIndexes` 指定只取 id 参与生成 key**，确保两侧 key 一致。
+
+```java
+@Service
+public class UserService {
+
+  // 查询 — 缓存结果，key: user([1])
+  @BingCache(cacheName = "user", expireTime = 300)
+  public UserVO getUserById(Long id) {
+    return userMapper.selectById(id);
+  }
+
+  // 更新 — 清除缓存，argIndexes={0} 只用 id 生成 key → user([1]) ✓ 匹配
+  @BingCacheEvict(cacheName = "user", argIndexes = {0})
+  public void updateUser(Long id, UserVO vo) {
+    userMapper.updateById(vo);
+  }
+
+  // 删除 — 只有一个参数，不需要 argIndexes，key 自然匹配 → user([1]) ✓
+  @BingCacheEvict(cacheName = "user")
+  public void deleteUser(Long id) {
+    userMapper.deleteById(id);
+  }
+
+  // 批量刷新 — 只清空 user 缓存，不影响其他 cacheName 的缓存
+  @BingCacheEvict(cacheName = "user", allEntries = true)
+  public void refreshAllUsers() {
+    // 批量操作后，所有 user 前缀的缓存统一失效，dict 等其他缓存不受影响
+  }
+}
+```
+
+> **注意**：如果查询方法使用了 `argIndexes`，清除方法也需要设置对应的 `argIndexes`，确保生成的 key 一致。
+> 例如查询方法 `@BingCache(cacheName = "user", argIndexes = {0})`，清除方法也应为 `@BingCacheEvict(cacheName = "user", argIndexes = {0})`。
+
+## 缓存 Key 生成规则
+
+格式：`前缀(参数1, 参数2, ...)`
+
+### 前缀优先级
+
+1. **`cacheName`**（最高）— 如 `user`
+2. **`keyPrefix`** — 如 `user:detail`
+3. **默认** — 类全限定名.方法名，如 `com.example.UserService.getUserById`
+
+### 参数序列化
+
+| 参数类型 | 序列化方式 | 示例 |
+|----------|-----------|------|
+| null | 字符串 `"null"` | `user([null])` |
+| Number / Boolean / Character / String | `String.valueOf()` | `user([42])`、`user([true])`、`user([Alice])` |
+| 数组 | `Arrays.deepToString()` | `user([[1, 2, 3]])` |
+| 自定义对象 | Jackson JSON 序列化 | `user([{"id":1,"name":"Alice"}])` |
+
+> 自定义对象使用 Jackson 序列化而非 `toString()`，确保不同实例和 JVM 重启后 key 一致。
+> Jackson 序列化失败时降级为 `hashCode()`，仍能保证 key 生成不中断。
+
+### Key 长度限制
+
+生成的 key 最大长度为 **256 个字符**。超过时自动截断参数部分并追加截断哈希后缀（`...#` + SHA-256 前 16 位十六进制字符），保证截断后的 key 仍然唯一。
+
+### 示例
+
+```java
+@BingCache(cacheName = "user", expireTime = 60)
+public UserVO getUserById(Long id) { ... }
+// 调用 getUserById(1L) → key: "user([1])"
+
+@BingCache(keyPrefix = "user:list", argIndexes = {0}, expireTime = 300)
+public List<UserVO> getUserList(UserQueryVO query, HttpServletRequest request) { ... }
+// 调用 getUserList(query, req) → key: "user:list([{"page":1,"size":10}])"
+
+@BingCache(expireTime = 3600)
+public List<DictVO> getDictList(String dictType) { ... }
+// 调用 getDictList("sys_config") → key: "com.example.DictService.getDictList([sys_config])"
+```
+
+## 缓存架构
+
+### 两种缓存模式
+
+#### L1 仅本地缓存（默认，无需 Redis）
+
+```
+请求 → @BingCache → L1(Caffeine) 命中?
+                       ├─ 是 → 返回缓存值
+                       └─ 否 → 执行方法 → 写入 L1 → 返回结果
+```
+
+适用场景：单实例部署，或对缓存一致性要求不高的场景。
+
+#### L1 + L2 二级缓存（需要 Redis）
+
+```
+请求 → @BingCache → L1(Caffeine) 命中?
+                       ├─ 是 → 返回缓存值
+                       └─ 否 → L2(Redis) 命中?
+                                    ├─ 是 → 回填 L1(携带剩余 TTL) → 返回缓存值
+                                    └─ 否 → 执行方法 → 写入 L1 + L2 → 返回结果
+```
+
+适用场景：多实例部署，需要跨实例共享缓存和缓存一致性。
+
+### L2 回填 L1 的 TTL 策略
+
+L1 未命中但 L2 命中时，L2 的值会回填到 L1。回填时通过 Redis `TTL` 命令获取 L2 的剩余过期时间：
+
+- **remainingTtl > 0**：使用剩余 TTL 回填 L1
+- **remainingTtl == -1**：L2 永不过期，L1 也永不过期
+- **remainingTtl == -2 或 0**：L2 中 key 已不存在或即将过期，**跳过回填**，避免在 L1 创建永不过期的脏数据
+
+### 跨实例缓存失效（Redis Pub/Sub）
+
+多实例部署时，任一实例执行 `@BingCacheEvict` 触发的失效操作会通过 Redis Pub/Sub 广播到其他实例：
+
+```
+实例 A: @BingCacheEvict → 清除 L2 + 清除 L1 → 发布 Pub/Sub 消息 + 递增版本号
+实例 B: 收到 Pub/Sub 消息 → 清除本地 L1 缓存
+实例 C: 收到 Pub/Sub 消息 → 清除本地 L1 缓存
+```
+
+- 消息包含 `instanceId`，各实例自动过滤自己发出的消息（自发自滤）
+- Pub/Sub 是 fire-and-forget 模式，不保证消息送达；`RedisMessageListenerContainer` 会自动重连
+- 频道名称默认 `bing-cache:invalidation`，可通过配置修改
+
+### 版本对账机制
+
+作为 Pub/Sub 消息丢失的补偿，组件提供版本对账机制：
+
+1. **版本号存储**：Redis 中维护每个 cacheName 的版本号
+   - Key 格式：`bing-cache:version:{cacheName}`
+   - 全局版本：`bing-cache:version:__all__`
+   - 每次 evict/clear/clearByPrefix 操作时递增对应版本号
+
+2. **定时对账**：`CacheReconciliationService` 每隔 `interval` 秒检查版本号变化
+   - 发现全局版本变化 → 清空所有 L1 缓存
+   - 发现 cacheName 版本变化 → 按前缀清空 L1 缓存
+   - 版本无变化 → 不做任何操作
+   - 服务启动后立即执行首次对账（initialDelay=0）
+
+3. **调优建议**：
+   - `interval` 越小，一致性越好，但 Redis 开销越大（每次对账 N 次 `GET`，N = 活跃 cacheName 数量）
+   - 默认 30 秒适合大多数场景；一致性要求高可缩短到 10 秒
+   - 可配合 `l1-max-ttl` 使用，作为双重保障
+
+### Redis 降级与恢复
+
+当 Redis 连续操作失败达到 3 次时，输出 WARN 级别降级日志：
+
+```
+WARN  Bing Cache: Redis L2 cache has failed 3 consecutive times, degraded to L1-only mode. Check Redis connectivity.
+```
+
+Redis 恢复正常后：
+
+1. 输出 INFO 级别恢复日志：
+   ```
+   INFO  Bing Cache: Redis L2 cache has recovered from degradation
+   ```
+
+2. **自动清理 L1 脏数据**：恢复时触发回调，自动清空 L1 缓存，避免降级期间写入的旧数据残留
+
+降级期间，所有 L2 操作静默失败，缓存自动退化为纯 L1 模式，不影响业务正常运行。
+
+## 配置属性
+
+通过 `application.yml` 配置，前缀为 `bing.cache`：
+
+```yaml
+bing:
+  cache:
+    caffeine:
+      max-size: 1000                    # Caffeine Cache 的最大条目数（默认 1000）
+      l1-max-ttl: 0                     # L1 最大存活秒数，0 表示不限制（默认 0）
+    redis:
+      enabled: true                     # 是否启用 L2 Redis 缓存（默认 true）
+      key-prefix: "bing-cache:"         # Redis key 前缀（默认 bing-cache:）
+      channel-name: "bing-cache:invalidation"  # Pub/Sub 频道名称（默认 bing-cache:invalidation）
+    reconciliation:
+      enabled: true                     # 是否启用版本对账（默认 true）
+      interval: 30                      # 对账间隔秒数（默认 30）
+```
+
+### 配置说明
+
+| 属性 | 默认值 | 说明 |
+|------|--------|------|
+| `bing.cache.caffeine.max-size` | `1000` | Caffeine Cache 的最大条目数 |
+| `bing.cache.caffeine.l1-max-ttl` | `0` | L1 最大存活秒数，0 表示不限制。设置后所有 L1 条目过期时间不超过该值，作为 Pub/Sub 丢失或 Redis 不可用时的兜底保障 |
+| `bing.cache.redis.enabled` | `true` | 是否启用 L2 Redis 缓存。仅在 classpath 存在 Redis 依赖且连接可用时生效 |
+| `bing.cache.redis.key-prefix` | `bing-cache:` | Redis 中缓存 key 的前缀，用于命名空间隔离 |
+| `bing.cache.redis.channel-name` | `bing-cache:invalidation` | 缓存失效通知的 Pub/Sub 频道名称 |
+| `bing.cache.reconciliation.enabled` | `true` | 是否启用版本对账，补偿 Pub/Sub 消息丢失 |
+| `bing.cache.reconciliation.interval` | `30` | 版本对账间隔秒数 |
+
+### 启用 L2 Redis 缓存
+
+只需确保项目中引入了 `spring-boot-starter-data-redis` 依赖并配置了 Redis 连接：
+
+```xml
+<!-- 使用者项目 pom.xml -->
+<dependency>
+  <groupId>org.springframework.boot</groupId>
+  <artifactId>spring-boot-starter-data-redis</artifactId>
+</dependency>
+```
+
+```yaml
+# application.yml
+spring:
+  data:
+    redis:
+      host: localhost
+      port: 6379
+```
+
+`bing.cache.redis.enabled` 默认为 `true`，只要 Redis 连接可用，自动启用 L1+L2 二级缓存。
+
+### 禁用 L2 Redis 缓存
+
+即使项目中引入了 Redis 依赖，也可以通过配置显式禁用 L2：
+
+```yaml
+bing:
+  cache:
+    redis:
+      enabled: false
+```
+
+此时回退为纯 L1 本地缓存模式。
+
+### 无 Redis 的项目
+
+如果项目 classpath 中没有 `spring-boot-starter-data-redis`，组件自动以纯 L1 模式运行，无需任何额外配置。`spring-boot-starter-data-redis` 的 scope 为 `provided`，由使用者按需引入。
+
+## 手动管理缓存
+
+注入 `CacheManager` 接口可手动管理缓存：
+
+```java
+@Resource
+private CacheManager cacheManager;
+
+// 清除指定 key 的缓存
+cacheManager.evict("user([1])");
+
+// 清除指定前缀下的所有缓存
+cacheManager.clearByPrefix("user");
+
+// 清空所有缓存
+cacheManager.clear();
+```
+
+> 手动 evict 时，key 必须与 `CacheKeyGenerator` 生成的 key 完全一致。建议优先使用 `@BingCacheEvict` 注解方式。
+
+### 通过接口手动清缓存
+
+```java
+@RestController
+@RequestMapping("/cache")
+public class CacheController {
+
+  @Resource
+  private CacheManager cacheManager;
+
+  @PostMapping("/clear")
+  public String clear() {
+    cacheManager.clear();
+    return "ok";
+  }
+
+  @PostMapping("/evict/{key}")
+  public String evict(@PathVariable String key) {
+    cacheManager.evict(key);
+    return "ok";
+  }
+}
+```
+
+## null 值处理
+
+### 默认行为（不缓存 null）
+
+`@BingCache` 默认 `cacheNullValue = false`，方法返回 `null` 时不缓存，每次调用都会重新执行方法：
+
+```java
+@BingCache(cacheName = "user", expireTime = 60)
+public UserVO getUserById(Long id) {
+  // 如果 id 不存在返回 null，不会缓存，下次查询仍执行方法
+  return userMapper.selectById(id);
+}
+```
+
+### 缓存 null（防缓存穿透）
+
+当大量请求查询不存在的数据时，每次都会穿透到数据库。设置 `cacheNullValue = true` 可以缓存 null 结果：
+
+```java
+@BingCache(cacheName = "user", expireTime = 60, cacheNullValue = true)
+public UserVO getUserById(Long id) {
+  // id 不存在时返回 null，会被缓存，下次查询直接返回 null（不执行方法）
+  return userMapper.selectById(id);
+}
+```
+
+> 内部使用 `BingCacheNullValue.INSTANCE` 占位符存储，因为 Caffeine 不支持缓存 null 值。读取时自动还原为 null 返回给调用方。NullValue 只存 L1 不存 L2（Jackson 无法反序列化包私有类）。
+
+## 日志与调试
+
+开启 DEBUG 日志可查看缓存命中情况：
+
+```yaml
+logging:
+  level:
+    com.bing.cache: DEBUG
+```
+
+日志输出示例：
+
+```
+DEBUG Cache hit: user([1])                          # 缓存命中
+DEBUG Cache miss: user([1])                          # 缓存未命中
+DEBUG Cache put: user([1])                           # 缓存写入
+DEBUG Cache put (null value): user([999])            # null 值缓存写入
+DEBUG Cache skip (null result): user([999])          # null 结果跳过缓存
+DEBUG Cache evict: user([1])                         # 缓存清除
+DEBUG Cache clear by prefix: user                    # 按前缀清除
+DEBUG Cache clear all entries                        # 全局清空
+DEBUG L1 cache hit: user([1])                        # L1 命中（二级缓存模式）
+DEBUG L2 cache hit, backfilling L1: user([1])        # L2 命中回填 L1（二级缓存模式）
+DEBUG L1+L2 cache miss: user([1])                    # L1 和 L2 均未命中（二级缓存模式）
+DEBUG Redis cache hit: bing-cache:user([1])          # Redis 缓存命中
+WARN  Bing Cache: Redis L2 cache has failed 3 consecutive times, degraded to L1-only mode  # Redis 降级
+INFO  Bing Cache: Redis L2 cache has recovered from degradation                        # Redis 恢复
+```
+
+## 注意事项
+
+1. **自调用失效**：同类内部方法调用不会触发 AOP 代理，缓存注解不生效。需通过 Spring 注入的 Bean 调用。
+
+2. **`@BingCache` 与 `@BingCacheEvict` 的 key 必须匹配**：清除缓存时，生成的 key 必须与缓存写入时一致。`cacheName` 相同只保证前缀一致，**参数部分也必须一致**。最常见的问题是：查询方法只有 `id` 一个参数（key 为 `user([1])`），更新方法有 `id` 和 `vo` 两个参数却不加 `argIndexes`（key 变成 `user([1,{"id":1}]）`）——导致 evict 清不到缓存。解决方法：更新方法加 `argIndexes = {0}`，只用 id 生成 key。
+
+3. **Redis Pub/Sub 不保证送达**：失效消息基于 Redis Pub/Sub 广播，属于 fire-and-forget 模式。极端情况下（如网络抖动），其他实例可能收不到失效通知，导致短时间内读到旧数据。对一致性要求极高的场景，可结合较短的 `expireTime` 作为兜底。
+
+4. **适用场景**：本组件适用于读多写少、对缓存一致性要求为最终一致的业务场景（如字典数据、用户信息、配置信息等）。不适合频繁更新且要求强一致性的业务。
+
+5. **多实例部署**：L1 本地缓存各实例独立，`@BingCacheEvict` 通过 Pub/Sub 通知其他实例清除本地缓存，存在毫秒级延迟。如需强一致，请直接查询数据库。
+
+6. **缓存 key 一致性**：手动 `evict()` 时，key 必须和自动生成的完全一致，可从 DEBUG 日志中获取。推荐使用 `@BingCacheEvict` 注解替代手动操作。
+
+7. **Redis 依赖可选**：`spring-boot-starter-data-redis` 的 scope 为 `provided`，由使用者项目按需引入。没有 Redis 依赖时，组件自动以纯 L1 模式运行。
+
+8. **`allEntries` 清除范围**：`@BingCacheEvict(allEntries = true)` 配合 `cacheName` 或 `keyPrefix` 时，只清除该前缀下的缓存条目；都不指定时才全局清空。
+
+9. **`@BingCacheEvict` 未指定 cacheName/keyPrefix 时会输出警告**：当 `@BingCacheEvict` 既没有设置 `cacheName` 也没有设置 `keyPrefix` 时，默认前缀为当前方法名（如 `updateUser`），而对应的 `@BingCache` 方法默认前缀是其方法名（如 `getUserById`），两者不匹配会导致 evict 静默失效。组件会输出 WARN 日志提醒：
+
+    ```
+    WARN @BingCacheEvict on method 'updateUser' has no cacheName or keyPrefix set.
+    The default prefix (this method name) may not match @BingCache's method name,
+    causing eviction to silently miss the cached key.
+    Consider setting cacheName to match @BingCache.
+    ```
+
+    建议：始终为 `@BingCacheEvict` 指定 `cacheName`，与对应的 `@BingCache` 保持一致。
+
+## 技术栈
+
+- Java 21
+- Spring Boot 3.5.13
+- Caffeine（由 Spring Boot BOM 管理版本）
+- Spring Data Redis（provided scope，使用者提供）
+- AspectJ（由 Spring Boot BOM 管理版本）
+- Jackson（key 生成 + Redis 序列化）
+- JUnit 5 + Mockito（单元测试）
+- Testcontainers（集成测试）

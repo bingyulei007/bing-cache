@@ -1,0 +1,133 @@
+package com.bing.cache.cache;
+
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import java.io.Serial;
+import java.io.Serializable;
+
+/**
+ * 缓存失效通知消息.
+ *
+ * <p>用于 Redis Pub/Sub 跨实例传递缓存失效事件，
+ * 支持单 key 驱逐（EVICT）、全量清除（CLEAR）和按前缀清除（CLEAR_PREFIX）三种类型。</p>
+ */
+@JsonInclude(JsonInclude.Include.NON_NULL)
+public class CacheInvalidationMessage implements Serializable {
+
+  @Serial
+  private static final long serialVersionUID = 1L;
+
+  private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+
+  /**
+   * 失效消息类型.
+   */
+  public enum Type {
+    /** 单 key 驱逐. */
+    EVICT,
+    /** 全量清除. */
+    CLEAR,
+    /** 按前缀清除. */
+    CLEAR_PREFIX
+  }
+
+  private Type type;
+
+  private String key;
+
+  private long timestamp;
+
+  private String instanceId;
+
+  /** Jackson 反序列化用. */
+  CacheInvalidationMessage() {
+  }
+
+  private CacheInvalidationMessage(Type type, String key, long timestamp,
+      String instanceId) {
+    this.type = type;
+    this.key = key;
+    this.timestamp = timestamp;
+    this.instanceId = instanceId;
+  }
+
+  /**
+   * 创建单 key 驱逐消息.
+   *
+   * @param key        需要驱逐的缓存 key
+   * @param instanceId 发送实例的唯一标识，用于避免自己处理自己发出的消息
+   * @return 驱逐消息
+   */
+  public static CacheInvalidationMessage evict(String key, String instanceId) {
+    return new CacheInvalidationMessage(Type.EVICT, key, System.currentTimeMillis(),
+        instanceId);
+  }
+
+  /**
+   * 创建全量清除消息.
+   *
+   * @param instanceId 发送实例的唯一标识，用于避免自己处理自己发出的消息
+   * @return 清除消息
+   */
+  public static CacheInvalidationMessage clear(String instanceId) {
+    return new CacheInvalidationMessage(Type.CLEAR, null, System.currentTimeMillis(),
+        instanceId);
+  }
+
+  /**
+   * 创建按前缀清除消息.
+   *
+   * @param prefix     需要清除的缓存 key 前缀
+   * @param instanceId 发送实例的唯一标识，用于避免自己处理自己发出的消息
+   * @return 按前缀清除消息
+   */
+  public static CacheInvalidationMessage clearPrefix(String prefix, String instanceId) {
+    return new CacheInvalidationMessage(Type.CLEAR_PREFIX, prefix, System.currentTimeMillis(),
+        instanceId);
+  }
+
+  /**
+   * 将消息序列化为 JSON 字符串.
+   *
+   * @return JSON 字符串
+   */
+  public String toJson() {
+    try {
+      return OBJECT_MAPPER.writeValueAsString(this);
+    } catch (JsonProcessingException e) {
+      throw new IllegalStateException("Failed to serialize CacheInvalidationMessage", e);
+    }
+  }
+
+  /**
+   * 从 JSON 字符串反序列化消息.
+   *
+   * @param json JSON 字符串
+   * @return 缓存失效消息
+   */
+  public static CacheInvalidationMessage fromJson(String json) {
+    try {
+      return OBJECT_MAPPER.readValue(json, CacheInvalidationMessage.class);
+    } catch (JsonProcessingException e) {
+      throw new IllegalStateException("Failed to deserialize CacheInvalidationMessage", e);
+    }
+  }
+
+  public Type getType() {
+    return type;
+  }
+
+  public String getKey() {
+    return key;
+  }
+
+  public long getTimestamp() {
+    return timestamp;
+  }
+
+  public String getInstanceId() {
+    return instanceId;
+  }
+}
