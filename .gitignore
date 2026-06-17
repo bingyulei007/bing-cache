@@ -40,3 +40,6 @@ build/
 
 ### CodeGraph ###
 .codegraph/
+
+### Docs ###
+docs/
