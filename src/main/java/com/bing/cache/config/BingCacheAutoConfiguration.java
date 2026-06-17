@@ -15,9 +15,11 @@ import com.bing.cache.cache.RedisCacheManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.springframework.boot.autoconfigure.AutoConfigureAfter;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -45,6 +47,7 @@ import java.util.UUID;
  */
 @Configuration
 @EnableConfigurationProperties(BingCacheProperties.class)
+@AutoConfigureAfter(RedisAutoConfiguration.class)
 public class BingCacheAutoConfiguration {
 
   private static final Logger LOG = LoggerFactory.getLogger(BingCacheAutoConfiguration.class);

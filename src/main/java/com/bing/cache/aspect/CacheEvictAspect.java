@@ -70,6 +70,22 @@ public class CacheEvictAspect {
       }
     }
 
+    // argIndexes 为空且方法有多个参数时，提醒检查 key 是否与 @BingCache 匹配
+    if (!bingCacheEvict.allEntries()
+        && (bingCacheEvict.argIndexes() == null || bingCacheEvict.argIndexes().length == 0)
+        && method.getParameterCount() > 1) {
+      String methodKey = method.getDeclaringClass().getName() + "#" + method.getName()
+          + "#argIndexes";
+      if (WARNED_METHODS.add(methodKey)) {
+        LOG.warn("@BingCacheEvict on method '{}' has {} parameters but argIndexes is empty "
+            + "(default: all parameters participate in key generation). "
+            + "If the corresponding @BingCache uses argIndexes to select specific parameters, "
+            + "the generated keys will NOT match and eviction will silently fail. "
+            + "Set argIndexes on @BingCacheEvict to match @BingCache.",
+            method.getName(), method.getParameterCount());
+      }
+    }
+
     // allEntries=true 时不需要生成 key，避免无意义的 key 生成和潜在的 argIndexes 越界异常
     String key = bingCacheEvict.allEntries() ? null : CacheKeyGenerator.generate(method, args,
         bingCacheEvict.cacheName(), bingCacheEvict.keyPrefix(),
