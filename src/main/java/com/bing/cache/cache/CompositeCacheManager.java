@@ -14,7 +14,7 @@ public class CompositeCacheManager implements CacheManager {
 
   private static final Logger LOG = LoggerFactory.getLogger(CompositeCacheManager.class);
 
-  private final CaffeineCacheManager l1CacheManager;
+  private final CacheManager l1CacheManager;
 
   private final RedisCacheManager l2CacheManager;
 
@@ -29,7 +29,7 @@ public class CompositeCacheManager implements CacheManager {
    * @param l2CacheManager        L2 Redis 缓存管理器
    * @param invalidationPublisher 缓存失效通知发布器
    */
-  public CompositeCacheManager(CaffeineCacheManager l1CacheManager,
+  public CompositeCacheManager(CacheManager l1CacheManager,
       RedisCacheManager l2CacheManager,
       CacheInvalidationPublisher invalidationPublisher) {
     this(l1CacheManager, l2CacheManager, invalidationPublisher, null);
@@ -43,7 +43,7 @@ public class CompositeCacheManager implements CacheManager {
    * @param invalidationPublisher 缓存失效通知发布器
    * @param versionStore          版本号存储（可为 null，表示不启用对账）
    */
-  public CompositeCacheManager(CaffeineCacheManager l1CacheManager,
+  public CompositeCacheManager(CacheManager l1CacheManager,
       RedisCacheManager l2CacheManager,
       CacheInvalidationPublisher invalidationPublisher,
       CacheVersionStore versionStore) {
@@ -77,13 +77,12 @@ public class CompositeCacheManager implements CacheManager {
   @Override
   public void put(String key, Object value, long expireSeconds) {
     l1CacheManager.put(key, value, expireSeconds);
-    // BingCacheNullValue 是包私有类，Jackson 无法反序列化，只存 L1 不存 L2
-    // null 值缓存主要用于防穿透，L1 足够
-    if (!isBingCacheNullValue(value)) {
+    // NullValueSentinel 实现类（BingCacheNullValue）是包私有类，Jackson 无法反序列化，只存 L1 不存 L2
+    if (!(value instanceof NullValueSentinel)) {
       l2CacheManager.put(key, value, expireSeconds);
       LOG.debug("Cache put (L1+L2): {}, expireSeconds={}", key, expireSeconds);
     } else {
-      LOG.debug("Cache put (L1 only, BingCacheNullValue): {}, expireSeconds={}", key, expireSeconds);
+      LOG.debug("Cache put (L1 only, NullValueSentinel): {}, expireSeconds={}", key, expireSeconds);
     }
   }
 
@@ -95,7 +94,9 @@ public class CompositeCacheManager implements CacheManager {
     l2CacheManager.evict(key);
     l1CacheManager.evict(key);
     invalidationPublisher.publishEvict(key);
-    incrementVersion(key);
+    // 单 key evict 不写 version key：key 是完整 cache key（如 userCache(123)），
+    // 若按 key 写 version，Redis 中会产生与业务 key 数量等量的 version 键，无限膨胀。
+    // 跨实例失效依赖 Pub/Sub；单次 Pub/Sub 丢失可由 l1MaxTtl 兜底。
     LOG.debug("Cache evict (L2+L1+pub): {}", key);
   }
 
@@ -122,11 +123,11 @@ public class CompositeCacheManager implements CacheManager {
   /**
    * 获取 L1 本地缓存管理器.
    *
-   * <p>供 Pub/Sub 监听器获取 L1 实例以执行本地缓存失效。</p>
+   * <p>供 Pub/Sub 监听器和版本对账服务获取 L1 实例以执行本地缓存失效。</p>
    *
-   * @return CaffeineCacheManager 实例
+   * @return L1 缓存管理器
    */
-  public CaffeineCacheManager getL1CacheManager() {
+  public CacheManager getL1CacheManager() {
     return l1CacheManager;
   }
 
@@ -156,19 +157,6 @@ public class CompositeCacheManager implements CacheManager {
       LOG.warn("Skip L1 backfill for key '{}': L2 remaining TTL is {} "
           + "(key may have expired or been deleted between L2 hit and TTL check)", key, remainingTtl);
     }
-  }
-
-  /**
-   * 检查是否为 BingCacheNullValue 占位符.
-   *
-   * <p>BingCacheNullValue 是 CacheAspect 的包私有类，用于缓存 null 值防穿透。
-   * 该类无法被 Jackson 反序列化（包私有 + 私有构造器），因此不能存入 Redis。</p>
-   *
-   * @param value 待检查的值
-   * @return true 如果是 BingCacheNullValue 占位符
-   */
-  private boolean isBingCacheNullValue(Object value) {
-    return value != null && "BingCacheNullValue".equals(value.getClass().getSimpleName());
   }
 
   /**

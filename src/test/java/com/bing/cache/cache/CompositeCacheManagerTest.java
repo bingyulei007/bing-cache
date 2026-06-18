@@ -82,9 +82,9 @@ class CompositeCacheManagerTest {
   }
 
   /**
-   * 模拟 BingCacheNullValue 占位符.
+   * 模拟 NullValueSentinel 占位符（与生产代码中的 BingCacheNullValue 等价）.
    */
-  static final class BingCacheNullValue {
+  static final class BingCacheNullValue implements NullValueSentinel {
     static final BingCacheNullValue INSTANCE = new BingCacheNullValue();
 
     private BingCacheNullValue() {

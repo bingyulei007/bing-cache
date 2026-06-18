@@ -15,7 +15,7 @@ public class CacheInvalidationListener {
 
   private static final Logger LOG = LoggerFactory.getLogger(CacheInvalidationListener.class);
 
-  private final CaffeineCacheManager l1CacheManager;
+  private final CacheManager l1CacheManager;
 
   private final String instanceId;
 
@@ -25,7 +25,7 @@ public class CacheInvalidationListener {
    * @param l1CacheManager 本地 L1 缓存管理器
    * @param instanceId     当前实例的唯一标识，用于过滤自己发出的消息
    */
-  public CacheInvalidationListener(CaffeineCacheManager l1CacheManager,
+  public CacheInvalidationListener(CacheManager l1CacheManager,
       String instanceId) {
     this.l1CacheManager = l1CacheManager;
     this.instanceId = instanceId;

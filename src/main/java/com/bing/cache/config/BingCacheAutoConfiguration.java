@@ -105,13 +105,30 @@ public class BingCacheAutoConfiguration {
     CompositeCacheManager composite = new CompositeCacheManager(
         l1CacheManager, l2CacheManager, publisher, versionStore);
 
-    // Redis 恢复时清空 L1 脏数据
-    l2CacheManager.setRecoveryCallback(l1CacheManager::clear);
+    // Redis 恢复策略：
+    // - 对账已启用：不立即全量清空 L1，由对账服务在下一个周期（intervalSeconds 内）
+    //   按 cacheName 粒度分批清理，避免瞬间全量驱逐引发回源冲击（stampede）
+    // - 对账未启用：立即全量清空 L1，防止 Redis 恢复后脏数据持续暴露
+    if (properties.getReconciliation().isEnabled()) {
+      l2CacheManager.setRecoveryCallback(() ->
+          LOG.info("Bing Cache: Redis recovered; L1 stale entries will be cleared"
+              + " at next reconciliation cycle (within {}s)",
+              properties.getReconciliation().getInterval()));
+    } else {
+      l2CacheManager.setRecoveryCallback(l1CacheManager::clear);
+    }
 
     LOG.info("Bing Cache: L1 (Caffeine) + L2 (Redis) composite mode enabled"
         + ", reconciliation={}, l1MaxTtl={}s",
         properties.getReconciliation().isEnabled(),
         properties.getCaffeine().getL1MaxTtl());
+
+    if (properties.getCaffeine().getL1MaxTtl() <= 0) {
+      LOG.warn("Bing Cache: bing.cache.caffeine.l1-max-ttl is 0 (unlimited). "
+          + "In L1+L2 mode, if Pub/Sub messages are lost and reconciliation is unavailable, "
+          + "stale L1 entries will persist indefinitely. "
+          + "Consider setting l1-max-ttl=300 as a safety backstop.");
+    }
 
     return composite;
   }
@@ -199,8 +216,7 @@ public class BingCacheAutoConfiguration {
     /**
      * 注册缓存失效消息监听器.
      *
-     * <p>监听器需要获取 CompositeCacheManager 内部的 CaffeineCacheManager，
-     * 通过 CompositeCacheManager 暴露的 L1 访问器获取。</p>
+     * <p>监听器需要 L1 缓存管理器实例；通过 CompositeCacheManager 暴露的 L1 访问器获取。</p>
      *
      * @param cacheManager 缓存管理器（CompositeCacheManager 实例）
      * @return CacheInvalidationListener 实例
@@ -209,12 +225,12 @@ public class BingCacheAutoConfiguration {
     @ConditionalOnMissingBean
     public CacheInvalidationListener cacheInvalidationListener(CacheManager cacheManager,
         String bingCacheInstanceId) {
-      CaffeineCacheManager l1;
+      CacheManager l1;
       if (cacheManager instanceof CompositeCacheManager composite) {
         l1 = composite.getL1CacheManager();
       } else {
         // 非 Composite 模式下不应创建此 bean，但作为防御性处理
-        l1 = (CaffeineCacheManager) cacheManager;
+        l1 = cacheManager;
       }
       return new CacheInvalidationListener(l1, bingCacheInstanceId);
     }
@@ -265,11 +281,11 @@ public class BingCacheAutoConfiguration {
         StringRedisTemplate stringRedisTemplate,
         CacheManager cacheManager,
         BingCacheProperties properties) {
-      CaffeineCacheManager l1;
+      CacheManager l1;
       if (cacheManager instanceof CompositeCacheManager composite) {
         l1 = composite.getL1CacheManager();
       } else {
-        l1 = (CaffeineCacheManager) cacheManager;
+        l1 = cacheManager;
       }
       CacheVersionStore versionStore = new CacheVersionStore(stringRedisTemplate,
           properties.getRedis().getKeyPrefix() + "version:");

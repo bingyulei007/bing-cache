@@ -2,6 +2,7 @@ package com.bing.cache.aspect;
 
 import com.bing.cache.annotation.BingCache;
 import com.bing.cache.cache.CacheManager;
+import com.bing.cache.cache.NullValueSentinel;
 import com.bing.cache.util.CacheKeyGenerator;
 
 import org.aspectj.lang.ProceedingJoinPoint;
@@ -18,7 +19,8 @@ import java.lang.reflect.Method;
  *
  * <p>拦截带有 {@link BingCache} 注解的方法，实现缓存查询和写入逻辑。
  * 当 {@link BingCache#cacheNullValue()} 为 {@code true} 时，
- * 使用 {@link BingCacheNullValue#INSTANCE} 占位符缓存 null 结果，防止缓存穿透。</p>
+ * 使用 {@link BingCacheNullValue#INSTANCE} 占位符（实现 {@link NullValueSentinel}）
+ * 缓存 null 结果，防止缓存穿透。</p>
  */
 @Aspect
 public class CacheAspect {
@@ -59,7 +61,7 @@ public class CacheAspect {
     if (cached != null) {
       LOG.debug("Cache hit: {}", key);
       // null 值占位符 → 返回 null
-      if (BingCacheNullValue.isBingCacheNullValue(cached)) {
+      if (cached instanceof NullValueSentinel) {
         return null;
       }
       return cached;

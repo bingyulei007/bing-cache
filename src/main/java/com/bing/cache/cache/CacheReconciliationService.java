@@ -27,7 +27,7 @@ public class CacheReconciliationService implements SmartLifecycle {
 
   private final CacheVersionStore versionStore;
 
-  private final CaffeineCacheManager l1CacheManager;
+  private final CacheManager l1CacheManager;
 
   private final long intervalSeconds;
 
@@ -47,7 +47,7 @@ public class CacheReconciliationService implements SmartLifecycle {
    * @param intervalSeconds  对账间隔秒数
    */
   public CacheReconciliationService(CacheVersionStore versionStore,
-      CaffeineCacheManager l1CacheManager,
+      CacheManager l1CacheManager,
       long intervalSeconds) {
     this.versionStore = versionStore;
     this.l1CacheManager = l1CacheManager;
