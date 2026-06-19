@@ -11,6 +11,7 @@ import org.aspectj.lang.annotation.Aspect;
 import org.aspectj.lang.reflect.MethodSignature;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.util.StringUtils;
 
 import java.lang.reflect.Method;
 import java.util.Set;
@@ -109,7 +110,7 @@ public class CacheAspect {
    * @param method    目标方法
    */
   private void warnIfKeyAndArgIndexesConflict(BingCache bingCache, Method method) {
-    if (!bingCache.argSpel().isEmpty()
+    if (StringUtils.hasText(bingCache.argSpel())
         && bingCache.argIndexes() != null && bingCache.argIndexes().length > 0) {
       String methodKey = method.getDeclaringClass().getName() + "#" + method.getName()
           + "#keyConflict";

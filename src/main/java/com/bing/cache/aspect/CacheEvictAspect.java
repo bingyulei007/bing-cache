@@ -10,6 +10,7 @@ import org.aspectj.lang.annotation.Aspect;
 import org.aspectj.lang.reflect.MethodSignature;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.util.StringUtils;
 
 import java.lang.reflect.Method;
 import java.util.Set;
@@ -81,7 +82,7 @@ public class CacheEvictAspect {
 
     // argSpel 和 argIndexes 同时设置时，argSpel 优先，警告一次
     if (!bingCacheEvict.allEntries()
-        && !bingCacheEvict.argSpel().isEmpty()
+        && StringUtils.hasText(bingCacheEvict.argSpel())
         && bingCacheEvict.argIndexes() != null && bingCacheEvict.argIndexes().length > 0) {
       String methodKey = method.getDeclaringClass().getName() + "#" + method.getName()
           + "#keyConflict";
@@ -94,7 +95,7 @@ public class CacheEvictAspect {
 
     // argIndexes 为空且方法有多个参数时，提醒检查 key 是否与 @BingCache 匹配
     if (!bingCacheEvict.allEntries()
-        && bingCacheEvict.argSpel().isEmpty()
+        && !StringUtils.hasText(bingCacheEvict.argSpel())
         && (bingCacheEvict.argIndexes() == null || bingCacheEvict.argIndexes().length == 0)
         && method.getParameterCount() > 1) {
       String methodKey = method.getDeclaringClass().getName() + "#" + method.getName()
