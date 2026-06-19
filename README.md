@@ -8,10 +8,10 @@
 - **两级缓存**：L1(Caffeine) + L2(Redis) 组合，L1 未命中自动回填并携带 L2 剩余 TTL
 - **跨实例失效**：基于 Redis Pub/Sub 广播缓存失效消息，多实例部署时 L1 缓存自动同步
 - **版本对账**：定时检查 Redis 版本号变化，补偿 Pub/Sub 消息丢失，确保最终一致性
-- **自动降级**：Redis 不可用时自动回退纯 L1 本地缓存模式，恢复后自动清理 L1 脏数据
+- **自动降级**：Redis 不可用时自动回退纯 L1 本地缓存模式，恢复后按对账配置处理 L1 脏数据
 - **L1 存活限制**：`l1-max-ttl` 限制 L1 条目最大存活时间，作为 Pub/Sub 丢失的兜底保障
 - **null 值防穿透**：`cacheNullValue` 属性支持缓存 null 结果，防止缓存穿透
-- **SpEL Key 表达式**：`argSpel` 属性支持 SpEL 表达式从参数中选取值生成 key（如 `#user.id`），与 Spring `@Cacheable` 语法一致
+- **SpEL Key 表达式**：`argSpel` 属性支持 SpEL 表达式从参数中选取值生成 key（如 `#user.id`），支持类似 Spring `@Cacheable` 的参数变量
 - **确定性 Key**：基于 Jackson 序列化生成 key，不依赖 `toString()`，重启后保持一致
 - **自动装配**：Spring Boot Starter 一键引入，根据 classpath 和配置自动选择缓存模式
 
@@ -25,7 +25,7 @@
 <dependency>
   <groupId>cn.com.bingbing</groupId>
   <artifactId>bing-cache</artifactId>
-  <version>1.0-SNAPSHOT</version>
+  <version>1.1-SNAPSHOT</version>
 </dependency>
 ```
 
@@ -38,7 +38,7 @@
 public class DictService {
 
   // 缓存查询结果，1 小时过期
-  @BingCache(expireTime = 3600)
+  @BingCache(cacheName = "dict", expireTime = 3600)
   public List<DictVO> getDictList(String dictType) {
     return dictMapper.selectByType(dictType);
   }
@@ -134,7 +134,7 @@ SpEL 表达式求值结果通过 Jackson 序列化为字符串（非基本类型
 public UserVO getUserById(Long id) { ... }
 // key: user([1])
 
-// 更新 — 清除对应缓存（cacheName 相同即可匹配）
+// 更新 — 清除对应缓存（cacheName 相同且参数部分一致即可匹配）
 @BingCacheEvict(cacheName = "user", argIndexes = {0})
 public void updateUser(Long id, UserVO vo) { ... }
 // evict key: user([1]) ✓ 匹配
@@ -341,7 +341,7 @@ L1 未命中但 L2 命中时，L2 的值会回填到 L1。回填时通过 Redis 
 多实例部署时，任一实例执行 `@BingCacheEvict` 触发的失效操作会通过 Redis Pub/Sub 广播到其他实例：
 
 ```
-实例 A: @BingCacheEvict → 清除 L2 + 清除 L1 → 发布 Pub/Sub 消息 + 递增版本号
+实例 A: @BingCacheEvict → 清除 L2 + 清除 L1 → 发布 Pub/Sub 消息
 实例 B: 收到 Pub/Sub 消息 → 清除本地 L1 缓存
 实例 C: 收到 Pub/Sub 消息 → 清除本地 L1 缓存
 ```
@@ -394,7 +394,9 @@ Redis 恢复正常后：
    INFO  Bing Cache: Redis L2 cache has recovered from degradation
    ```
 
-2. **自动清理 L1 脏数据**：恢复时触发回调，自动清空 L1 缓存，避免降级期间写入的旧数据残留
+2. **L1 脏数据处理策略**：
+   - 对账启用（默认）：不立即全量清空 L1，由对账服务在下一个周期按 cacheName 粒度清理，避免恢复瞬间大量回源
+   - 对账禁用：立即全量清空 L1，防止 Redis 恢复后脏数据持续暴露
 
 降级期间，所有 L2 操作静默失败，缓存自动退化为纯 L1 模式，不影响业务正常运行。
 
