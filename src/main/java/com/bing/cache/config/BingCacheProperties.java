@@ -1,6 +1,10 @@
 package com.bing.cache.config;
 
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Min;
+
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.validation.annotation.Validated;
 
 /**
  * Bing Cache 配置属性.
@@ -25,21 +29,25 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * </pre>
  */
 @ConfigurationProperties(prefix = "bing.cache")
+@Validated
 public class BingCacheProperties {
 
   /**
    * Caffeine 本地缓存配置.
    */
+  @Valid
   private Caffeine caffeine = new Caffeine();
 
   /**
    * Redis 分布式缓存配置.
    */
+  @Valid
   private Redis redis = new Redis();
 
   /**
    * 版本对账配置.
    */
+  @Valid
   private Reconciliation reconciliation = new Reconciliation();
 
   public Caffeine getCaffeine() {
@@ -74,18 +82,24 @@ public class BingCacheProperties {
     /**
      * Caffeine Cache 的最大条目数.
      */
+    @Min(1)
     private long maxSize = 1000L;
 
     /**
      * L1 最大存活秒数，0 表示不限制.
      *
-     * <p>当配置后，所有 L1 条目的过期时间不超过该值，
+     * <p>当配置为正数时，所有 L1 条目的过期时间不超过该值，
      * 作为 Pub/Sub 丢失或 Redis 不可用时的兜底保障。</p>
      *
-     * <p><b>生产环境建议：</b>在 L1+L2 二级缓存模式下，建议设置为 300（秒）左右。
-     * 若保持默认值 0（不限制），当 Pub/Sub 消息连续丢失且对账服务暂时不可达时，
-     * L1 中的过期缓存将持续对外提供旧数据，直到下一次对账或服务重启。</p>
+     * <p><b>默认兜底行为：</b>属性默认值为 0。在 L1+L2 二级缓存模式下，
+     * 若保持 0，{@link com.bing.cache.config.BingCacheAutoConfiguration} 会自动使用
+     * {@code DEFAULT_L1_MAX_TTL_SECONDS}（300 秒）作为实际生效值，并输出 INFO 日志说明。
+     * 原因：L1+L2 模式下单 key evict 的 Pub/Sub 丢失无法通过对账补偿，需要 l1-max-ttl 兜底，
+     * 否则脏数据会在 L1 中无限期驻留。纯 L1 模式下 0 即不限制，不自动兜底。</p>
+     *
+     * <p>如需禁用此兜底（不推荐），可在 L1+L2 模式下显式设置一个足够大的正数。</p>
      */
+    @Min(0)
     private long l1MaxTtl = 0L;
 
     public long getMaxSize() {
@@ -168,7 +182,11 @@ public class BingCacheProperties {
 
     /**
      * 对账间隔秒数.
+     *
+     * <p>必须为正整数。设为 0 或负数会导致 {@code scheduleAtFixedRate} 抛出
+     * {@link IllegalArgumentException}，启动失败。</p>
      */
+    @Min(1)
     private long interval = 30L;
 
     public boolean isEnabled() {

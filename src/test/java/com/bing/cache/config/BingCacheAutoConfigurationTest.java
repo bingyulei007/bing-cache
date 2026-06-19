@@ -4,11 +4,18 @@ import com.bing.cache.aspect.CacheAspect;
 import com.bing.cache.aspect.CacheEvictAspect;
 import com.bing.cache.cache.CacheManager;
 import com.bing.cache.cache.CaffeineCacheManager;
+import com.bing.cache.cache.CompositeCacheManager;
+import com.bing.cache.cache.CacheVersionStore;
 
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -46,5 +53,73 @@ class BingCacheAutoConfigurationTest {
         .run(context -> {
           assertTrue(context.getBeansOfType(CacheManager.class).size() == 1);
         });
+  }
+
+  /**
+   * 测试 L1+L2 模式下 l1-max-ttl=0 时自动兜底为 DEFAULT_L1_MAX_TTL_SECONDS（300s）.
+   *
+   * <p>原因：L1+L2 模式下单 key evict 的 Pub/Sub 丢失无法通过对账补偿，
+   * 需要 l1-max-ttl 兜底，否则脏数据会无限期驻留 L1。</p>
+   */
+  @Test
+  void testL1MaxTtlDefaultsTo300InCompositeMode() {
+    BingCacheAutoConfiguration config = new BingCacheAutoConfiguration();
+    BingCacheProperties props = new BingCacheProperties();
+    // 默认 l1MaxTtl=0，应自动兜底为 300
+    assertEquals(0L, props.getCaffeine().getL1MaxTtl());
+
+    @SuppressWarnings("unchecked")
+    ObjectProvider<CacheVersionStore> provider = Mockito.mock(ObjectProvider.class);
+    Mockito.when(provider.getIfAvailable()).thenReturn(null);
+
+    CacheManager cm = config.compositeCacheManager(
+        Mockito.mock(StringRedisTemplate.class),
+        Mockito.mock(RedisTemplate.class),
+        props,
+        "test-instance",
+        provider);
+
+    assertTrue(cm instanceof CompositeCacheManager);
+    CaffeineCacheManager l1 = (CaffeineCacheManager) ((CompositeCacheManager) cm).getL1CacheManager();
+    assertEquals(BingCacheAutoConfiguration.DEFAULT_L1_MAX_TTL_SECONDS,
+        l1.getL1MaxTtlSeconds());
+  }
+
+  /**
+   * 测试 L1+L2 模式下用户显式设置 l1-max-ttl 时尊重用户值，不自动兜底.
+   */
+  @Test
+  void testCustomL1MaxTtlRespectedInCompositeMode() {
+    BingCacheAutoConfiguration config = new BingCacheAutoConfiguration();
+    BingCacheProperties props = new BingCacheProperties();
+    props.getCaffeine().setL1MaxTtl(600L);
+
+    @SuppressWarnings("unchecked")
+    ObjectProvider<CacheVersionStore> provider = Mockito.mock(ObjectProvider.class);
+    Mockito.when(provider.getIfAvailable()).thenReturn(null);
+
+    CacheManager cm = config.compositeCacheManager(
+        Mockito.mock(StringRedisTemplate.class),
+        Mockito.mock(RedisTemplate.class),
+        props,
+        "test-instance",
+        provider);
+
+    CaffeineCacheManager l1 = (CaffeineCacheManager) ((CompositeCacheManager) cm).getL1CacheManager();
+    assertEquals(600L, l1.getL1MaxTtlSeconds());
+  }
+
+  /**
+   * 测试纯 L1 模式下 l1-max-ttl=0 保持不限制，不自动兜底.
+   */
+  @Test
+  void testL1MaxTtlStaysZeroInPureL1Mode() {
+    BingCacheAutoConfiguration config = new BingCacheAutoConfiguration();
+    BingCacheProperties props = new BingCacheProperties();
+
+    CacheManager cm = config.caffeineCacheManager(props);
+
+    assertTrue(cm instanceof CaffeineCacheManager);
+    assertEquals(0L, ((CaffeineCacheManager) cm).getL1MaxTtlSeconds());
   }
 }

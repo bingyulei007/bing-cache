@@ -47,7 +47,6 @@ public class CacheAspect {
    * @throws Throwable 方法执行异常
    */
   @Around("@annotation(bingCache)")
-  @SuppressWarnings("checkstyle:MissingJavadocMethod")
   public Object around(ProceedingJoinPoint joinPoint, BingCache bingCache) throws Throwable {
     MethodSignature signature = (MethodSignature) joinPoint.getSignature();
     Method method = signature.getMethod();
@@ -59,11 +58,12 @@ public class CacheAspect {
     // try cache
     Object cached = cacheManager.get(key);
     if (cached != null) {
-      LOG.debug("Cache hit: {}", key);
       // null 值占位符 → 返回 null
       if (cached instanceof NullValueSentinel) {
+        LOG.debug("Cache hit (null sentinel): {}", key);
         return null;
       }
+      LOG.debug("Cache hit: {}", key);
       return cached;
     }
 

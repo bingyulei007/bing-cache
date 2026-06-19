@@ -150,8 +150,13 @@ public final class CacheKeyGenerator {
     try {
       return OBJECT_MAPPER.writeValueAsString(arg);
     } catch (JsonProcessingException e) {
-      // Jackson 序列化失败时降级为 hashCode，保证 key 仍能生成
-      return String.valueOf(arg.hashCode());
+      // Jackson 序列化失败时不可静默降级为 hashCode：
+      // 未重写 hashCode 的对象走 identity hashCode，每次 JVM 启动都不同，
+      // 会破坏"重启后 key 一致"的承诺，导致缓存全部失效且难以排查。
+      // 直接抛异常让调用方感知并修复参数类型（如注册 JavaTime 模块、避免循环引用）。
+      throw new IllegalStateException(
+          "Failed to serialize argument of type " + arg.getClass().getName()
+              + " for cache key generation. Jackson error: " + e.getOriginalMessage(), e);
     }
   }
 

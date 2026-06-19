@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import java.lang.reflect.Method;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -248,11 +249,33 @@ class CacheKeyGeneratorTest {
     Object[] args = {"a", 2, 3L};
 
     // argIndexes 中包含越界索引 5，应抛出异常
-    IllegalArgumentException ex = org.junit.jupiter.api.Assertions.assertThrows(
+    IllegalArgumentException ex = assertThrows(
         IllegalArgumentException.class,
         () -> CacheKeyGenerator.generate(method, args, "", "", new int[]{0, 5}));
     assertTrue(ex.getMessage().contains("argIndexes[1]=5"));
     assertTrue(ex.getMessage().contains("args length=3"));
+  }
+
+  /**
+   * 测试 Jackson 序列化失败时抛出 IllegalStateException 而非静默降级为 hashCode.
+   *
+   * <p>循环引用对象会触发 JsonProcessingException。
+   * 重启一致性要求 key 跨 JVM 启动保持一致，identity hashCode 无法保证这一点，
+   * 因此应直接抛异常让调用方感知问题，而非生成不稳定的 key。</p>
+   */
+  @Test
+  void testJacksonSerializationFailureThrowsException() throws NoSuchMethodException {
+    Method method = TestService.class.getMethod("findByUser", TestUser.class);
+    TestUser user = new TestUser(1L, "Alice");
+    // 构造循环引用，触发 JsonProcessingException
+    user.setPartner(user);
+    Object[] args = {user};
+
+    IllegalStateException ex = assertThrows(
+        IllegalStateException.class,
+        () -> CacheKeyGenerator.generate(method, args, "", "", new int[]{}));
+    assertTrue(ex.getMessage().contains("Failed to serialize argument of type"));
+    assertTrue(ex.getCause() instanceof com.fasterxml.jackson.core.JsonProcessingException);
   }
 
   /**
@@ -290,6 +313,8 @@ class CacheKeyGeneratorTest {
 
     private final String name;
 
+    private TestUser partner;
+
     TestUser(Long id, String name) {
       this.id = id;
       this.name = name;
@@ -301,6 +326,14 @@ class CacheKeyGeneratorTest {
 
     public String getName() {
       return name;
+    }
+
+    public TestUser getPartner() {
+      return partner;
+    }
+
+    public void setPartner(TestUser partner) {
+      this.partner = partner;
     }
   }
 }

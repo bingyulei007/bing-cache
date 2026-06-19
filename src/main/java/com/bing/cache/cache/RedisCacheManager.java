@@ -7,6 +7,7 @@ import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.ScanOptions;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -141,7 +142,7 @@ public class RedisCacheManager implements CacheManager {
       ScanOptions options = ScanOptions.scanOptions().match(pattern).count(100).build();
       try (var cursor = connection.keyCommands().scan(options)) {
         while (cursor.hasNext()) {
-          result.add(new String(cursor.next()));
+          result.add(new String(cursor.next(), StandardCharsets.UTF_8));
         }
       }
       return result;
@@ -188,11 +189,21 @@ public class RedisCacheManager implements CacheManager {
    *
    * <p>如果之前处于降级状态，输出 INFO 级别恢复日志，
    * 并触发恢复回调。</p>
+   *
+   * <p>恢复判断通过 synchronized 保证原子性：多个线程并发成功时，
+   * 仅一个线程能将 {@code degradationWarned} 从 true 翻转为 false 并触发回调，
+   * 避免回调被重复触发。回调在锁外执行，避免持锁过久。</p>
    */
   private void recordSuccess() {
     consecutiveFailures.set(0);
-    if (degradationWarned) {
-      degradationWarned = false;
+    boolean recovered = false;
+    synchronized (this) {
+      if (degradationWarned) {
+        degradationWarned = false;
+        recovered = true;
+      }
+    }
+    if (recovered) {
       LOG.info("Bing Cache: Redis L2 cache has recovered from degradation");
       triggerRecoveryCallback();
     }

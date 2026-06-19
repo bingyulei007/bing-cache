@@ -219,7 +219,7 @@ public class UserService {
 | 自定义对象 | Jackson JSON 序列化 | `user([{"id":1,"name":"Alice"}])` |
 
 > 自定义对象使用 Jackson 序列化而非 `toString()`，确保不同实例和 JVM 重启后 key 一致。
-> Jackson 序列化失败时降级为 `hashCode()`，仍能保证 key 生成不中断。
+> Jackson 序列化失败时直接抛 `IllegalStateException`（而非降级为 `hashCode()`，后者对未重写 `hashCode` 的对象走 identity hashCode，重启后会变化，破坏 key 一致性）。
 
 ### Key 长度限制
 
@@ -296,7 +296,8 @@ L1 未命中但 L2 命中时，L2 的值会回填到 L1。回填时通过 Redis 
 1. **版本号存储**：Redis 中维护每个 cacheName 的版本号
    - Key 格式：`bing-cache:version:{cacheName}`
    - 全局版本：`bing-cache:version:__all__`
-   - 每次 evict/clear/clearByPrefix 操作时递增对应版本号
+   - `clear()` 递增全局版本号；`clearByPrefix(prefix)` 递增对应 cacheName 的版本号
+   - **单 key `evict(key)` 不递增版本号**（见下方"对账范围限制"）
 
 2. **定时对账**：`CacheReconciliationService` 每隔 `interval` 秒检查版本号变化
    - 发现全局版本变化 → 清空所有 L1 缓存
@@ -308,6 +309,14 @@ L1 未命中但 L2 命中时，L2 的值会回填到 L1。回填时通过 Redis 
    - `interval` 越小，一致性越好，但 Redis 开销越大（每次对账 N 次 `GET`，N = 活跃 cacheName 数量）
    - 默认 30 秒适合大多数场景；一致性要求高可缩短到 10 秒
    - 可配合 `l1-max-ttl` 使用，作为双重保障
+
+4. **对账范围限制（重要）**：
+   - 对账只补偿 `clear()` 和 `clearByPrefix(prefix)` 的 Pub/Sub 丢失，因为这两类操作会递增版本号。
+   - **单 key `evict(key)` 的 Pub/Sub 丢失无法通过对账补偿**。原因：单 key evict 若按 key 写版本号，Redis 中会产生与业务 key 数量等量的 version 键，无限膨胀。
+   - 因此单 key evict 的跨实例失效完全依赖 Pub/Sub 实时送达；若 Pub/Sub 丢失，受影响实例只能通过 `l1-max-ttl` 自然过期兜底。
+   - 对一致性要求高的单 key 场景，建议：
+     - 设置合理的 `l1-max-ttl`（如 300 秒）作为兜底
+     - 或改用 `@BingCacheEvict(allEntries = true)` 触发 `clearByPrefix`，享受对账补偿
 
 ### Redis 降级与恢复
 
@@ -337,7 +346,7 @@ bing:
   cache:
     caffeine:
       max-size: 1000                    # Caffeine Cache 的最大条目数（默认 1000）
-      l1-max-ttl: 0                     # L1 最大存活秒数，0 表示不限制（默认 0）
+      l1-max-ttl: 0                     # L1 最大存活秒数，0 表示不限制（默认 0；L1+L2 模式下 0 会自动兜底为 300）
     redis:
       enabled: true                     # 是否启用 L2 Redis 缓存（默认 true）
       key-prefix: "bing-cache:"         # Redis key 前缀（默认 bing-cache:）
@@ -352,7 +361,7 @@ bing:
 | 属性 | 默认值 | 说明 |
 |------|--------|------|
 | `bing.cache.caffeine.max-size` | `1000` | Caffeine Cache 的最大条目数 |
-| `bing.cache.caffeine.l1-max-ttl` | `0` | L1 最大存活秒数，0 表示不限制。设置后所有 L1 条目过期时间不超过该值，作为 Pub/Sub 丢失或 Redis 不可用时的兜底保障 |
+| `bing.cache.caffeine.l1-max-ttl` | `0` | L1 最大存活秒数，0 表示不限制。设置后所有 L1 条目过期时间不超过该值，作为 Pub/Sub 丢失或 Redis 不可用时的兜底保障。**L1+L2 模式下若保持 0，组件会自动使用 300 秒作为兜底默认值**（因单 key evict 的 Pub/Sub 丢失无法通过对账补偿）；纯 L1 模式下 0 即不限制 |
 | `bing.cache.redis.enabled` | `true` | 是否启用 L2 Redis 缓存。仅在 classpath 存在 Redis 依赖且连接可用时生效 |
 | `bing.cache.redis.key-prefix` | `bing-cache:` | Redis 中缓存 key 的前缀，用于命名空间隔离 |
 | `bing.cache.redis.channel-name` | `bing-cache:invalidation` | 缓存失效通知的 Pub/Sub 频道名称 |
@@ -470,6 +479,14 @@ public UserVO getUserById(Long id) {
 ```
 
 > 内部使用 `BingCacheNullValue.INSTANCE` 占位符存储，因为 Caffeine 不支持缓存 null 值。读取时自动还原为 null 返回给调用方。NullValue 只存 L1 不存 L2（Jackson 无法反序列化包私有类）。
+>
+> **⚠️ 跨实例限制**：由于 NullValue 不写入 L2（Redis），`cacheNullValue = true` 只能在**本实例**缓存 null 结果防穿透。多实例部署下，**每个实例对同一个不存在的 id 会各自回源一次**，之后该实例即命中本地 L1，不会持续穿透（除非 L1 条目过期或被 LRU 驱逐后重新回源一次）。也就是说 N 个实例对同一个不存在的 id 总共回源 N 次（而非 1 次），之后各实例稳定命中 L1。
+>
+> 如果希望跨实例共享 null 缓存（每个 id 全集群只回源一次），建议：
+> - 在业务层用布隆过滤器拦截不存在的 id
+> - 或显式缓存一个"空对象"占位符（如空 `UserVO`，public 类可被 Jackson 序列化写入 L2），而非依赖 null 缓存
+>
+> 注意：上述限制针对的是**正常业务场景**（少量不存在的 id 被反复查询）。若面临**恶意穿透攻击**（海量不同 id 各查一次），L1 的 `max-size` 容量限制会导致 NullValue 来不及生效，此时必须用布隆过滤器在入口拦截，无论单实例还是多实例、是否写 L2 都无法仅靠缓存解决。
 
 ## 日志与调试
 
@@ -506,7 +523,7 @@ INFO  Bing Cache: Redis L2 cache has recovered from degradation                 
 
 2. **`@BingCache` 与 `@BingCacheEvict` 的 key 必须匹配**：清除缓存时，生成的 key 必须与缓存写入时一致。`cacheName` 相同只保证前缀一致，**参数部分也必须一致**。最常见的问题是：查询方法只有 `id` 一个参数（key 为 `user([1])`），更新方法有 `id` 和 `vo` 两个参数却不加 `argIndexes`（key 变成 `user([1,{"id":1}]）`）——导致 evict 清不到缓存。解决方法：更新方法加 `argIndexes = {0}`，只用 id 生成 key。
 
-3. **Redis Pub/Sub 不保证送达**：失效消息基于 Redis Pub/Sub 广播，属于 fire-and-forget 模式。极端情况下（如网络抖动），其他实例可能收不到失效通知，导致短时间内读到旧数据。对一致性要求极高的场景，可结合较短的 `expireTime` 作为兜底。
+3. **Redis Pub/Sub 不保证送达**：失效消息基于 Redis Pub/Sub 广播，属于 fire-and-forget 模式。极端情况下（如网络抖动），其他实例可能收不到失效通知，导致短时间内读到旧数据。**注意：版本对账机制只补偿 `clear()` 和 `clearByPrefix()` 的 Pub/Sub 丢失，单 key `evict()` 的丢失无法补偿**（详见"版本对账机制 → 对账范围限制"）。建议生产环境设置 `l1-max-ttl` 作为兜底。
 
 4. **适用场景**：本组件适用于读多写少、对缓存一致性要求为最终一致的业务场景（如字典数据、用户信息、配置信息等）。不适合频繁更新且要求强一致性的业务。
 

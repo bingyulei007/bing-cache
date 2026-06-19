@@ -7,6 +7,7 @@ import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
+import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -111,7 +112,7 @@ public class CacheVersionStore {
       ScanOptions options = ScanOptions.scanOptions().match(pattern).count(100).build();
       try (var cursor = connection.keyCommands().scan(options)) {
         while (cursor.hasNext()) {
-          String key = new String(cursor.next());
+          String key = new String(cursor.next(), StandardCharsets.UTF_8);
           names.add(key.substring(versionKeyPrefix.length()));
         }
       }

@@ -1,6 +1,6 @@
-# CLAUDE.md
+# CODEBUDDY.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to CodeBuddy Code when working with code in this repository.
 
 ## Project Overview
 
@@ -29,6 +29,8 @@ mvn test -Dtest=CompositeCacheManagerIntegrationTest
 ```
 
 **JDK requirement**: Must use JDK 21. System default JDK 8 will cause Caffeine 3.x class loading failures.
+
+**Windows note**: The `mvn` bash wrapper may fail under Git Bash with classpath errors; run Maven via PowerShell if this happens.
 
 ## Architecture
 
@@ -63,16 +65,18 @@ CacheManager interface          (cache/)
 
 #### CaffeineCacheManager
 
-- **Single Cache + per-entry Expiry**: Uses one Caffeine Cache instance with `CacheEntry` record carrying per-entry `expireNanos`. `CacheEntryExpiry` implements Caffeine's `Expiry` interface for per-entry expiration.
+- **Single Cache + per-entry Expiry**: Uses one Caffeine Cache instance with `CacheEntry` record carrying per-entry `expireNanos`. `CacheEntryExpiry` implements Caffeine's `Expiry` interface for per-entry expiration. This replaces an older multi-Cache-by-TTL design that could create unbounded Cache instances under dynamic TTLs.
 - **L1 max TTL**: `l1MaxTtlSeconds` caps all L1 entry lifetimes. Applied in `put()` via `min(expireSeconds, l1MaxTtlSeconds)`. When `expireSeconds <= 0` (no expiry) but `l1MaxTtlSeconds > 0`, uses `l1MaxTtlSeconds` instead.
 - **`keys()` method**: Exposes `cache.asMap().keySet()` for reconciliation prefix checking.
+- **`clearByPrefix(prefix)`**: O(n) scan over all keys (`removeIf(key -> key.startsWith(prefix))`). Acceptable for typical cache sizes but worth noting for very large caches.
 
 #### CacheVersionStore
 
 - Redis-backed version counter per cacheName. Key format: `{keyPrefix}version:{cacheName}`.
 - Global version key: `{keyPrefix}version:__all__`.
-- `incrementVersion(cacheName)` / `incrementAllVersion()` — called by CompositeCacheManager on evict/clear/clearByPrefix.
+- `incrementVersion(cacheName)` / `incrementAllVersion()` — called by CompositeCacheManager on `clear()` / `clearByPrefix(prefix)`. Single-key `evict()` does NOT increment (see Evict flow below).
 - `getVersion(cacheName)` / `getActiveCacheNames()` — called by CacheReconciliationService during periodic checks.
+- Registered as a single shared bean in `BingCacheAutoConfiguration` (consumed by both `CompositeCacheManager` and `CacheReconciliationService` via `ObjectProvider`).
 
 #### CacheReconciliationService
 
@@ -84,23 +88,22 @@ CacheManager interface          (cache/)
 #### CompositeCacheManager
 
 - **Backfill race fix**: `backfillL1()` checks `remainingTtl`: >0 → use it; -1 → L1 no expiry; -2/0 → skip backfill + warn log.
-- **Version increment**: `evict()` calls `incrementVersion(key)`, `clear()` calls `incrementAllVersion()`, `clearByPrefix(prefix)` calls `incrementVersion(prefix)`. All guarded by `versionStore != null`.
-- **Redis recovery callback**: `RedisCacheManager.setRecoveryCallback()` is wired in auto-config to `l1CacheManager::clear`, ensuring L1 dirty data is cleared when Redis recovers from degradation.
+- **Version increment**: `clear()` calls `incrementAllVersion()`, `clearByPrefix(prefix)` calls `incrementVersion(prefix)`. Both guarded by `versionStore != null`. `evict(key)` does NOT increment version.
+- **Redis recovery callback** (`RedisCacheManager.setRecoveryCallback()`, wired in auto-config): conditional — when reconciliation is enabled, the callback only logs and lets the reconciliation service clear L1 incrementally at the next cycle (avoids stampede); when reconciliation is disabled, the callback calls `l1CacheManager::clear` immediately.
 
 ### Auto-configuration conditions
 
 - `CompositeCacheManager` activates when `RedisConnectionFactory` bean exists AND `bing.cache.redis.enabled=true` (default)
 - `CaffeineCacheManager` activates as fallback via `@ConditionalOnMissingBean(CacheManager.class)`
 - `CacheReconciliationService` activates when Redis is available AND `bing.cache.reconciliation.enabled=true` (default)
-- Registered via `AutoConfiguration.imports` (Spring Boot 3.x). `spring.factories` 已删除（Spring Boot 3.x 不再读取该文件用于自动配置）。
+- Registered via `AutoConfiguration.imports` (Spring Boot 3.x). `spring.factories` has been deleted (Spring Boot 3.x no longer reads it for auto-configuration).
 
 ### Key design decisions
 
-- **BingCacheNullValue sentinel**: Caffeine cannot store null. `BingCacheNullValue` (package-private) is used as a placeholder. It is only stored in L1, never in L2 (Jackson can't deserialize it). `CompositeCacheManager` detects it via `instanceof NullValueSentinel` (类型安全，不依赖类名字符串)。**限制**：`cacheNullValue=true` 只防本实例穿透；多实例下其他实例查询不存在的 id 仍会回源（NullValue 不写 L2）。
+- **BingCacheNullValue sentinel**: Caffeine cannot store null. `BingCacheNullValue` (package-private, implements `NullValueSentinel`) is used as a placeholder. It is only stored in L1, never in L2 (Jackson can't deserialize the package-private class). `CompositeCacheManager` detects it via `instanceof NullValueSentinel` (type-safe, does not rely on class name strings). **Limitation**: `cacheNullValue=true` only prevents cache penetration on the local instance; other instances querying a non-existent id still hit the DB (NullValue is not written to L2).
 - **L1 backfill carries L2 remaining TTL**: When L2 hits but L1 misses, `RedisCacheManager.getRemainingTtl()` fetches the remaining expiry so L1 entries don't outlive their L2 counterparts. Race condition: if TTL returns -2/0, backfill is skipped.
 - **Evict order**: L2 cleared before L1 to minimize TOCTOU window.
-- **Cache key format**: `prefix([arg1, arg2, ...])` — prefix priority: `cacheName` > `keyPrefix` > `fullyQualifiedClassName.methodName`. Max 256 chars; overflow gets truncated with SHA-256 hash suffix (first 16 hex chars).
-- **Single Caffeine Cache**: Per-entry `Expiry` replaces the old multi-Cache-by-TTL design, preventing dynamic TTL from creating unbounded Cache instances.
+- **Cache key format**: `prefix([arg1, arg2, ...])` — prefix priority: `cacheName` > `keyPrefix` > `fullyQualifiedClassName.methodName`. Max 256 chars; overflow gets truncated with SHA-256 hash suffix (first 16 hex chars). Custom objects are serialized via Jackson (not `toString()`) for deterministic cross-JVM consistency; Jackson failures throw `IllegalStateException` rather than degrading to `hashCode()` (identity hashCode changes across restarts, breaking the consistency promise).
 
 ### Data flows
 
@@ -140,7 +143,7 @@ L2.evict(key) → L1.evict(key) → publisher.publishEvict(key)
 - **No Lombok**: All classes use hand-written getters/setters/loggers. Logger field name is `LOG`.
 - **Chinese comments and Javadoc**: The codebase uses Chinese for documentation. Match this style for consistency.
 - **Git commit format**: `[bing-cache] description` — Change-Id auto-generated by Gerrit hook, do not add manually. Jira number required.
-- **MapStruct**: Listed as annotation processor but not currently used in source code.
+- **MapStruct**: Listed as annotation processor in `pom.xml` but not currently used in source code.
 
 ## Configuration Properties
 
@@ -156,8 +159,10 @@ Prefix: `bing.cache`
 | `reconciliation.enabled` | true | Enable version reconciliation for Pub/Sub loss compensation |
 | `reconciliation.interval` | 30 | Reconciliation check interval in seconds |
 
+`BingCacheProperties` is annotated with `@Validated` and uses Bean Validation (`@Min` constraints on `maxSize`, `l1MaxTtl`, `interval`). Invalid values fail binding at startup rather than causing runtime errors (e.g., `interval=0` would otherwise make `scheduleAtFixedRate` throw).
+
 ## Test Structure
 
 - Unit tests in `src/test/java/.../` — Mockito for mocking Redis, JUnit 5
-- Integration tests: `CompositeCacheManagerIntegrationTest`, `ReconciliationIntegrationTest` — use Testcontainers (redis:7-alpine), requires Docker
+- Integration tests: `CompositeCacheManagerIntegrationTest`, `ReconciliationIntegrationTest` — use Testcontainers (`redis:7-alpine`), requires Docker
 - 150 test cases total (count via `@Test` annotations)

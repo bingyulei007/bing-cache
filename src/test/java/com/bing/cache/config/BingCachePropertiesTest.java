@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.autoconfigure.AutoConfigurations;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 /**
  * BingCacheProperties 单元测试.
@@ -64,5 +66,36 @@ class BingCachePropertiesTest {
     if (!condition) {
       throw new AssertionError("Expected true but was false");
     }
+  }
+
+  /**
+   * 验证 reconciliation.interval=0 触发校验失败，启动报错.
+   *
+   * <p>interval 必须为正整数，否则 scheduleAtFixedRate 会抛 IllegalArgumentException。
+   * 校验注解应在绑定阶段提前拦截，给出清晰错误而非启动时栈。</p>
+   */
+  @Test
+  void testInvalidIntervalFailsValidation() {
+    new ApplicationContextRunner()
+        .withConfiguration(AutoConfigurations.of(BingCacheAutoConfiguration.class))
+        .withPropertyValues("bing.cache.reconciliation.interval=0")
+        .run(context -> {
+          assertNotNull(context.getStartupFailure(),
+              "Expected startup failure due to invalid interval=0");
+        });
+  }
+
+  /**
+   * 验证 caffeine.max-size=0 触发校验失败.
+   */
+  @Test
+  void testInvalidMaxSizeFailsValidation() {
+    new ApplicationContextRunner()
+        .withConfiguration(AutoConfigurations.of(BingCacheAutoConfiguration.class))
+        .withPropertyValues("bing.cache.caffeine.max-size=0")
+        .run(context -> {
+          assertNotNull(context.getStartupFailure(),
+              "Expected startup failure due to invalid max-size=0");
+        });
   }
 }

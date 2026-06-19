@@ -26,8 +26,13 @@ public class CacheEvictAspect {
 
   private static final Logger LOG = LoggerFactory.getLogger(CacheEvictAspect.class);
 
-  /** 已警告过的方法，避免重复输出 WARN 日志. */
-  private static final Set<String> WARNED_METHODS = ConcurrentHashMap.newKeySet();
+  /**
+   * 已警告过的方法，避免重复输出 WARN 日志.
+   *
+   * <p>实例字段（非 static），避免同一 JVM 内多个 Spring 上下文（如集成测试场景）
+   * 共享此集合导致后续上下文不再输出警告日志。</p>
+   */
+  private final Set<String> warnedMethods = ConcurrentHashMap.newKeySet();
 
   private final CacheManager cacheManager;
 
@@ -49,7 +54,6 @@ public class CacheEvictAspect {
    * @throws Throwable 方法执行异常
    */
   @Around("@annotation(bingCacheEvict)")
-  @SuppressWarnings("checkstyle:MissingJavadocMethod")
   public Object around(ProceedingJoinPoint joinPoint, BingCacheEvict bingCacheEvict)
       throws Throwable {
     MethodSignature signature = (MethodSignature) joinPoint.getSignature();
@@ -62,7 +66,7 @@ public class CacheEvictAspect {
         && (bingCacheEvict.keyPrefix() == null || bingCacheEvict.keyPrefix().isEmpty())) {
       String methodKey = method.getDeclaringClass().getName() + "#" + method.getName()
           + "(" + method.getParameterCount() + " params)";
-      if (WARNED_METHODS.add(methodKey)) {
+      if (warnedMethods.add(methodKey)) {
         LOG.warn("@BingCacheEvict on method '{}' has no cacheName or keyPrefix set. "
             + "The default prefix (this method name) may not match @BingCache's method name, "
             + "causing eviction to silently miss the cached key. "
@@ -76,7 +80,7 @@ public class CacheEvictAspect {
         && method.getParameterCount() > 1) {
       String methodKey = method.getDeclaringClass().getName() + "#" + method.getName()
           + "#argIndexes";
-      if (WARNED_METHODS.add(methodKey)) {
+      if (warnedMethods.add(methodKey)) {
         LOG.warn("@BingCacheEvict on method '{}' has {} parameters but argIndexes is empty "
             + "(default: all parameters participate in key generation). "
             + "If the corresponding @BingCache uses argIndexes to select specific parameters, "

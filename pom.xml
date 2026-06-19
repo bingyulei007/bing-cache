@@ -105,10 +105,24 @@
       <optional>true</optional>
     </dependency>
 
+    <!-- Bean Validation API (provided — 使用者项目提供实现，如 spring-boot-starter-validation) -->
+    <dependency>
+      <groupId>jakarta.validation</groupId>
+      <artifactId>jakarta.validation-api</artifactId>
+      <scope>provided</scope>
+    </dependency>
+
     <!-- Test dependencies -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+
+    <!-- Bean Validation 实现（仅测试用；运行时由使用者项目提供） -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-validation</artifactId>
       <scope>test</scope>
     </dependency>
 

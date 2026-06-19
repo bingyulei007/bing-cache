@@ -15,6 +15,7 @@ import com.bing.cache.cache.RedisCacheManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfigureAfter;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -53,6 +54,19 @@ public class BingCacheAutoConfiguration {
   private static final Logger LOG = LoggerFactory.getLogger(BingCacheAutoConfiguration.class);
 
   /**
+   * L1+L2 模式下 l1-max-ttl 的默认兜底值（秒）.
+   *
+   * <p>当用户未显式配置 {@code bing.cache.caffeine.l1-max-ttl}（或设为 0）时，
+   * 在 L1+L2 二级缓存模式下使用此值作为 L1 最大存活时间。
+   * 纯 L1 模式不受影响，仍按用户配置（默认 0=不限制）。</p>
+   *
+   * <p>原因：L1+L2 模式下若 l1-max-ttl=0（不限制），单 key evict 的 Pub/Sub 丢失
+   * 无法通过对账补偿，脏数据会在 L1 中无限期驻留。300 秒作为兜底，
+   * 在缓存命中率和一致性之间取平衡。</p>
+   */
+  static final long DEFAULT_L1_MAX_TTL_SECONDS = 300L;
+
+  /**
    * 注册当前实例的唯一标识，用于 Pub/Sub 消息的自发自滤.
    *
    * <p>Publisher 发送消息时携带此 ID，Listener 收到后过滤掉自己发出的消息，
@@ -66,6 +80,28 @@ public class BingCacheAutoConfiguration {
   }
 
   /**
+   * 注册缓存版本号存储（仅 Redis 可用且对账启用时）.
+   *
+   * <p>作为单一 bean 供 {@link CompositeCacheManager} 和 {@link CacheReconciliationService}
+   * 共享，避免此前两处各自 new 一个实例的冗余。</p>
+   *
+   * @param stringRedisTemplate Redis 字符串操作模板
+   * @param properties          缓存配置属性
+   * @return CacheVersionStore 实例
+   */
+  @Bean
+  @ConditionalOnBean(RedisConnectionFactory.class)
+  @ConditionalOnProperty(prefix = "bing.cache.reconciliation", name = "enabled",
+      havingValue = "true", matchIfMissing = true)
+  @ConditionalOnMissingBean
+  public CacheVersionStore cacheVersionStore(
+      StringRedisTemplate stringRedisTemplate,
+      BingCacheProperties properties) {
+    return new CacheVersionStore(stringRedisTemplate,
+        properties.getRedis().getKeyPrefix() + "version:");
+  }
+
+  /**
    * 注册 L1+L2 组合缓存管理器（Redis 连接可用且启用时优先）.
    *
    * <p>当 classpath 中存在 Redis 连接且 {@code bing.cache.redis.enabled=true}（默认）时，
@@ -75,6 +111,7 @@ public class BingCacheAutoConfiguration {
    * @param bingCacheRedisTemplate Redis 对象操作模板
    * @param properties             缓存配置属性
    * @param bingCacheInstanceId    实例唯一标识
+   * @param versionStoreProvider   版本号存储 ObjectProvider（对账禁用时为空）
    * @return CompositeCacheManager 实例
    */
   @Bean("cacheManager")
@@ -86,21 +123,26 @@ public class BingCacheAutoConfiguration {
       StringRedisTemplate stringRedisTemplate,
       RedisTemplate<String, Object> bingCacheRedisTemplate,
       BingCacheProperties properties,
-      String bingCacheInstanceId) {
+      String bingCacheInstanceId,
+      ObjectProvider<CacheVersionStore> versionStoreProvider) {
+    // L1+L2 模式下，若用户未显式设置 l1-max-ttl（<=0），使用默认兜底值。
+    // 纯 L1 模式不进入此分支，不受影响。
+    long configuredL1MaxTtl = properties.getCaffeine().getL1MaxTtl();
+    long effectiveL1MaxTtl = configuredL1MaxTtl > 0
+        ? configuredL1MaxTtl
+        : DEFAULT_L1_MAX_TTL_SECONDS;
+    boolean usingDefaultL1MaxTtl = configuredL1MaxTtl <= 0;
+
     CaffeineCacheManager l1CacheManager = new CaffeineCacheManager(
         properties.getCaffeine().getMaxSize(),
-        properties.getCaffeine().getL1MaxTtl());
+        effectiveL1MaxTtl);
     RedisCacheManager l2CacheManager = new RedisCacheManager(
         bingCacheRedisTemplate, properties.getRedis().getKeyPrefix());
     CacheInvalidationPublisher publisher = new RedisCacheInvalidationPublisher(
         stringRedisTemplate, properties.getRedis().getChannelName(), bingCacheInstanceId);
 
-    // 版本对账（默认启用）
-    CacheVersionStore versionStore = null;
-    if (properties.getReconciliation().isEnabled()) {
-      versionStore = new CacheVersionStore(stringRedisTemplate,
-          properties.getRedis().getKeyPrefix() + "version:");
-    }
+    // 版本对账（默认启用）：通过 ObjectProvider 获取共享 bean，对账禁用时为 null
+    CacheVersionStore versionStore = versionStoreProvider.getIfAvailable();
 
     CompositeCacheManager composite = new CompositeCacheManager(
         l1CacheManager, l2CacheManager, publisher, versionStore);
@@ -119,16 +161,12 @@ public class BingCacheAutoConfiguration {
     }
 
     LOG.info("Bing Cache: L1 (Caffeine) + L2 (Redis) composite mode enabled"
-        + ", reconciliation={}, l1MaxTtl={}s",
+        + ", reconciliation={}, l1MaxTtl={}s{}",
         properties.getReconciliation().isEnabled(),
-        properties.getCaffeine().getL1MaxTtl());
-
-    if (properties.getCaffeine().getL1MaxTtl() <= 0) {
-      LOG.warn("Bing Cache: bing.cache.caffeine.l1-max-ttl is 0 (unlimited). "
-          + "In L1+L2 mode, if Pub/Sub messages are lost and reconciliation is unavailable, "
-          + "stale L1 entries will persist indefinitely. "
-          + "Consider setting l1-max-ttl=300 as a safety backstop.");
-    }
+        effectiveL1MaxTtl,
+        usingDefaultL1MaxTtl
+            ? " (default; configure bing.cache.caffeine.l1-max-ttl to override)"
+            : "");
 
     return composite;
   }
@@ -268,9 +306,9 @@ public class BingCacheAutoConfiguration {
      * <p>仅在 Redis 可用且对账启用时注册。
      * 服务随 Spring 容器生命周期自动启停。</p>
      *
-     * @param stringRedisTemplate Redis 字符串操作模板
-     * @param cacheManager         缓存管理器
-     * @param properties           缓存配置属性
+     * @param versionStore  版本号存储（共享 bean）
+     * @param cacheManager  缓存管理器
+     * @param properties    缓存配置属性
      * @return CacheReconciliationService 实例
      */
     @Bean
@@ -278,7 +316,7 @@ public class BingCacheAutoConfiguration {
         havingValue = "true", matchIfMissing = true)
     @ConditionalOnMissingBean
     public CacheReconciliationService cacheReconciliationService(
-        StringRedisTemplate stringRedisTemplate,
+        CacheVersionStore versionStore,
         CacheManager cacheManager,
         BingCacheProperties properties) {
       CacheManager l1;
@@ -287,8 +325,6 @@ public class BingCacheAutoConfiguration {
       } else {
         l1 = cacheManager;
       }
-      CacheVersionStore versionStore = new CacheVersionStore(stringRedisTemplate,
-          properties.getRedis().getKeyPrefix() + "version:");
       CacheReconciliationService service = new CacheReconciliationService(
           versionStore, l1, properties.getReconciliation().getInterval());
       REDIS_LOG.info("Bing Cache: Reconciliation service configured, interval={}s",
