@@ -5,45 +5,79 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.lang.reflect.Method;
 import java.util.Arrays;
+import java.util.concurrent.ConcurrentHashMap;
+
+import org.springframework.context.expression.MethodBasedEvaluationContext;
+import org.springframework.core.ParameterNameDiscoverer;
+import org.springframework.expression.Expression;
+import org.springframework.expression.ExpressionParser;
+import org.springframework.util.StringUtils;
 
 /**
  * 缓存 Key 生成器.
  *
  * <p>根据方法签名和参数值生成唯一的缓存 key。
- * 参数序列化使用 Jackson ObjectMapper，确保自定义对象的 key 生成
+ * 支持两种参数选取方式：</p>
+ * <ul>
+ *   <li>SpEL 表达式（{@code keyExpression} 非空）：通过表达式从参数中选取值，如 {@code #user.id}</li>
+ *   <li>参数索引（{@code argIndexes}）：按位置选取整个参数，SpEL 为空时使用</li>
+ * </ul>
+ *
+ * <p>参数序列化使用 Jackson ObjectMapper，确保自定义对象的 key 生成
  * 不依赖 {@code toString()} 实现，在不同实例和 JVM 重启后保持一致。</p>
  *
  * <p>生成的 key 最大长度为 {@value #MAX_KEY_LENGTH} 个字符，
  * 超过时截断参数部分并追加哈希后缀以保证唯一性。</p>
  */
-public final class CacheKeyGenerator {
+public class CacheKeyGenerator {
 
   private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
   /** 缓存 key 最大长度. */
   static final int MAX_KEY_LENGTH = 256;
 
-  private CacheKeyGenerator() {
-    // utility class
+  private final ExpressionParser expressionParser;
+
+  private final ParameterNameDiscoverer parameterNameDiscoverer;
+
+  private final ConcurrentHashMap<String, Expression> expressionCache =
+      new ConcurrentHashMap<>();
+
+  /**
+   * 构造方法注入 SpEL 解析器和参数名发现器.
+   *
+   * @param expressionParser       SpEL 表达式解析器
+   * @param parameterNameDiscoverer 方法参数名发现器，用于 {@code #参数名} 变量绑定
+   */
+  public CacheKeyGenerator(ExpressionParser expressionParser,
+      ParameterNameDiscoverer parameterNameDiscoverer) {
+    this.expressionParser = expressionParser;
+    this.parameterNameDiscoverer = parameterNameDiscoverer;
   }
 
   /**
    * 生成缓存 key.
    *
-   * <p>格式：前缀(参数1,参数2,...)
-   * 前缀优先级：cacheName > keyPrefix > 类全限定名.方法名。
-   * 如果提供 argIndexes，则只有指定索引的参数参与 key 生成。
-   * 参数值通过 Jackson 序列化为字符串，确保自定义对象的 key 确定性。</p>
+   * <p>格式：前缀(参数部分)
+   * 前缀优先级：cacheName > keyPrefix > 类全限定名.方法名。</p>
    *
-   * @param method     目标方法
-   * @param args       方法参数
-   * @param cacheName  缓存名称，用于读写注解共享同一前缀，可为空
-   * @param keyPrefix  自定义前缀，可为空
-   * @param argIndexes 参与 key 生成的参数索引，为空表示全部参数
+   * <p>参数部分生成方式：</p>
+   * <ul>
+   *   <li>{@code keyExpression} 非空：使用 SpEL 表达式求值，结果序列化为参数部分</li>
+   *   <li>{@code keyExpression} 为空：使用 argIndexes 选取参数并序列化</li>
+   * </ul>
+   *
+   * @param method        目标方法
+   * @param args          方法参数
+   * @param target        目标对象（SpEL {@code #root.target} 使用）
+   * @param cacheName     缓存名称，用于读写注解共享同一前缀，可为空
+   * @param keyPrefix     自定义前缀，可为空
+   * @param argIndexes    参与 key 生成的参数索引，为空表示全部参数
+   * @param keyExpression SpEL 表达式，为空时使用 argIndexes
    * @return 缓存 key
    */
-  public static String generate(Method method, Object[] args,
-      String cacheName, String keyPrefix, int[] argIndexes) {
+  public String generate(Method method, Object[] args, Object target,
+      String cacheName, String keyPrefix, int[] argIndexes, String keyExpression) {
     String className = method.getDeclaringClass().getName();
     String methodName = method.getName();
     String prefix;
@@ -55,10 +89,41 @@ public final class CacheKeyGenerator {
       prefix = className + "." + methodName;
     }
 
-    Object[] keyArgs = filterArgs(args, argIndexes);
-    String argsStr = serializeArgs(keyArgs);
+    String argsStr;
+    if (StringUtils.hasText(keyExpression)) {
+      Object evaluated = evaluateKey(method, args, target, keyExpression);
+      argsStr = serializeArg(evaluated);
+    } else {
+      Object[] keyArgs = filterArgs(args, argIndexes);
+      argsStr = serializeArgs(keyArgs);
+    }
     String key = prefix + "(" + argsStr + ")";
     return truncateKey(key);
+  }
+
+  /**
+   * 使用 SpEL 表达式求值.
+   *
+   * @param method        目标方法
+   * @param args          方法参数
+   * @param target        目标对象
+   * @param keyExpression SpEL 表达式
+   * @return 求值结果
+   */
+  private Object evaluateKey(Method method, Object[] args, Object target,
+      String keyExpression) {
+    CacheExpressionRootObject rootObject =
+        new CacheExpressionRootObject(method, args, target);
+    MethodBasedEvaluationContext context = new MethodBasedEvaluationContext(
+        rootObject, method, args, parameterNameDiscoverer);
+    try {
+      Expression expression = expressionCache.computeIfAbsent(keyExpression,
+          expressionParser::parseExpression);
+      return expression.getValue(context);
+    } catch (Exception e) {
+      throw new IllegalStateException(
+          "Failed to evaluate SpEL key expression: " + keyExpression, e);
+    }
   }
 
   /**
@@ -185,5 +250,42 @@ public final class CacheKeyGenerator {
       filtered[i] = args[idx];
     }
     return filtered;
+  }
+
+  /**
+   * SpEL 表达式求值的 Root 对象.
+   *
+   * <p>通过 {@code #root} 访问，提供方法元信息和目标对象：
+   * {@code #root.method}、{@code #root.args}、{@code #root.target}、{@code #root.methodName}。</p>
+   */
+  static final class CacheExpressionRootObject {
+
+    private final Method method;
+
+    private final Object[] args;
+
+    private final Object target;
+
+    CacheExpressionRootObject(Method method, Object[] args, Object target) {
+      this.method = method;
+      this.args = args;
+      this.target = target;
+    }
+
+    public Method getMethod() {
+      return method;
+    }
+
+    public String getMethodName() {
+      return method.getName();
+    }
+
+    public Object[] getArgs() {
+      return args;
+    }
+
+    public Object getTarget() {
+      return target;
+    }
   }
 }

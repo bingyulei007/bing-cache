@@ -11,6 +11,7 @@
 - **自动降级**：Redis 不可用时自动回退纯 L1 本地缓存模式，恢复后自动清理 L1 脏数据
 - **L1 存活限制**：`l1-max-ttl` 限制 L1 条目最大存活时间，作为 Pub/Sub 丢失的兜底保障
 - **null 值防穿透**：`cacheNullValue` 属性支持缓存 null 结果，防止缓存穿透
+- **SpEL Key 表达式**：`argSpel` 属性支持 SpEL 表达式从参数中选取值生成 key（如 `#user.id`），与 Spring `@Cacheable` 语法一致
 - **确定性 Key**：基于 Jackson 序列化生成 key，不依赖 `toString()`，重启后保持一致
 - **自动装配**：Spring Boot Starter 一键引入，根据 classpath 和配置自动选择缓存模式
 
@@ -42,6 +43,12 @@ public class DictService {
     return dictMapper.selectByType(dictType);
   }
 
+  // 使用 SpEL 表达式从对象中取字段作为 key
+  @BingCache(cacheName = "user", argSpel = "#user.id")
+  public UserVO getUser(UserVO user) {
+    return userMapper.selectById(user.getId());
+  }
+
   // 更新数据后清除缓存
   @BingCacheEvict(cacheName = "dict", argIndexes = {0})
   public void updateDict(String dictType, DictVO vo) {
@@ -61,7 +68,8 @@ public class DictService {
 | `cacheName` | String | `""` | 缓存名称，用于与 `@BingCacheEvict` 共享同一前缀，优先级最高 |
 | `keyPrefix` | String | `""` | 缓存 key 前缀，为空时使用"类全限定名.方法名"；`cacheName` 不为空时忽略 |
 | `expireTime` | int | `0` | 过期时间（秒），`0` 表示不过期 |
-| `argIndexes` | int[] | `{}` | 参与 key 生成的参数索引，空数组表示全部参数参与 |
+| `argIndexes` | int[] | `{}` | 参与 key 生成的参数索引，空数组表示全部参数参与；`argSpel` 非空时忽略 |
+| `argSpel` | String | `""` | SpEL 表达式，从参数中选取值参与 key 生成（如 `#user.id`）；非空时优先于 `argIndexes` |
 | `cacheNullValue` | boolean | `false` | 是否缓存 null 结果，设为 `true` 可防止缓存穿透 |
 
 #### cacheName 与 keyPrefix 怎么选？
@@ -80,6 +88,41 @@ public class DictService {
 - **只需要缓存、不需要清除** → 用 `keyPrefix` 缩短前缀，或不设置用默认前缀
 
 > 注意：`cacheName` 和 `keyPrefix` 同时设置时，只有 `cacheName` 生效。
+
+#### argSpel SpEL 表达式
+
+`argSpel` 接受 SpEL 表达式，从方法参数中选取值参与 key 生成。表达式中可用的变量（类似 Spring `@Cacheable` 的参数变量）：
+
+| 变量 | 说明 | 示例 |
+|------|------|------|
+| `#参数名` | 按名称引用方法参数 | `#id`、`#user.id` |
+| `#p0` / `#a0` | 按索引引用方法参数（从 0 开始） | `#p0` |
+| `#root.method` | 当前方法（`Method` 对象） | `#root.method.name` |
+| `#root.methodName` | 方法名 | `#root.methodName` |
+| `#root.args` | 参数数组 | `#root.args[0]` |
+| `#root.target` | 目标对象 | `#root.target.getClass()` |
+
+> 注意：不支持 `#root.targetClass`、`#caches` 等 Spring Cache 特有变量。
+
+SpEL 表达式求值结果通过 Jackson 序列化为字符串（非基本类型时），null 结果序列化为 `"null"`。
+
+最终 key 格式为 `前缀(spelResult)`，前缀仍由 `cacheName` / `keyPrefix` 决定。
+
+#### null 值处理
+
+**默认行为（不缓存 null）**：`cacheNullValue = false`，方法返回 null 时不缓存，每次调用都会重新执行方法。
+
+**缓存 null（防缓存穿透）**：设置 `cacheNullValue = true` 可以缓存 null 结果，防止大量请求查询不存在的数据时穿透到数据库。
+
+> 内部使用 `BingCacheNullValue.INSTANCE` 占位符存储，因为 Caffeine 不支持缓存 null 值。读取时自动还原为 null 返回给调用方。NullValue 只存 L1 不存 L2（Jackson 无法反序列化包私有类）。
+>
+> **⚠️ 跨实例限制**：由于 NullValue 不写入 L2（Redis），`cacheNullValue = true` 只能在**本实例**缓存 null 结果防穿透。多实例部署下，**每个实例对同一个不存在的 id 会各自回源一次**，之后该实例即命中本地 L1，不会持续穿透（除非 L1 条目过期或被 LRU 驱逐后重新回源一次）。也就是说 N 个实例对同一个不存在的 id 总共回源 N 次（而非 1 次），之后各实例稳定命中 L1。
+>
+> 如果希望跨实例共享 null 缓存（每个 id 全集群只回源一次），建议：
+> - 在业务层用布隆过滤器拦截不存在的 id
+> - 或显式缓存一个"空对象"占位符（如空 `UserVO`，public 类可被 Jackson 序列化写入 L2），而非依赖 null 缓存
+>
+> 注意：上述限制针对的是**正常业务场景**（少量不存在的 id 被反复查询）。若面临**恶意穿透攻击**（海量不同 id 各查一次），L1 的 `max-size` 容量限制会导致 NullValue 来不及生效，此时必须用布隆过滤器在入口拦截，无论单实例还是多实例、是否写 L2 都无法仅靠缓存解决。
 
 #### 使用示例
 
@@ -116,6 +159,28 @@ public List<DictVO> getDictList(String dictType) { ... }
 // 缓存 null 结果，防止缓存穿透
 @BingCache(cacheName = "user", expireTime = 60, cacheNullValue = true)
 public UserVO getUserById(Long id) { ... }
+
+// ========== argSpel 场景：SpEL 表达式选取参数 ==========
+
+// 从对象中取字段作为 key（只用 id，不用整个对象）
+@BingCache(cacheName = "user", argSpel = "#user.id", expireTime = 300)
+public UserVO getUser(UserVO user) { ... }
+// key: user(1)
+
+// 多参数拼接
+@BingCache(cacheName = "order", argSpel = "#userId + ':' + #type")
+public Order getOrder(Long userId, String type) { ... }
+// key: order(1:normal)
+
+// 按索引引用参数（#p0 = 第一个参数，#a0 同义）
+@BingCache(cacheName = "user", argSpel = "#p0")
+public UserVO getUserById(Long id) { ... }
+// key: user(1)
+
+// 访问对象方法
+@BingCache(cacheName = "user", argSpel = "#user.getName().toLowerCase()")
+public UserVO getUser(UserVO user) { ... }
+// key: user(alice)
 ```
 
 ### @BingCacheEvict — 缓存清除
@@ -126,7 +191,8 @@ public UserVO getUserById(Long id) { ... }
 |------|------|--------|------|
 | `cacheName` | String | `""` | 缓存名称，需与 `@BingCache` 的 `cacheName` 一致才能匹配 |
 | `keyPrefix` | String | `""` | 缓存 key 前缀，同 `@BingCache`；`cacheName` 不为空时忽略 |
-| `argIndexes` | int[] | `{}` | 参与 key 生成的参数索引，需与 `@BingCache` 的 `argIndexes` 对应 |
+| `argIndexes` | int[] | `{}` | 参与 key 生成的参数索引，需与 `@BingCache` 的 `argIndexes` 对应；`argSpel` 非空时忽略 |
+| `argSpel` | String | `""` | SpEL 表达式，需与 `@BingCache` 的 `argSpel` 一致才能匹配；非空时优先于 `argIndexes`；`allEntries=true` 时不生效 |
 | `allEntries` | boolean | `false` | `true` 时清除所有缓存：有 cacheName/keyPrefix 时只清除该前缀下的缓存；都没有时清空全部缓存 |
 | `beforeInvocation` | boolean | `false` | `true` 时在方法执行前清除缓存；默认方法成功后才清除 |
 
@@ -154,17 +220,18 @@ public void refreshAllUsers() { ... }
 // 清空全部缓存（不指定 cacheName/keyPrefix）
 @BingCacheEvict(allEntries = true)
 public void clearAllCache() { ... }
+
+// 使用 argSpel 与 @BingCache 配对（表达式需一致）
+@BingCacheEvict(cacheName = "user", argSpel = "#user.id")
+public void deleteUser(UserVO user) { ... }
+// evict key: user(1) ✓ 匹配
 ```
 
-### @BingCache 与 @BingCacheEvict 配对使用
+### 配对使用
 
 `cacheName` 是两个注解之间的桥梁——只要 `cacheName` 相同，清除操作就能精准匹配缓存条目。
 
-**⚠️ 重要：argIndexes 必须对应**
-
-缓存 key 由前缀 + 参数共同生成。如果查询方法只用 `id` 生成 key（key 为 `user([1])`），而更新方法有两个参数 `id` 和 `vo` 但不加 `argIndexes`，生成的 key 会是 `user([1,{"id":1,"name":"Alice"}])`——和查询的 key 不匹配，evict 清不到缓存！
-
-**必须用 `argIndexes` 指定只取 id 参与生成 key**，确保两侧 key 一致。
+**⚠️ 重要：参数部分也必须一致。** `cacheName` 相同只保证前缀一致，参数部分（`argIndexes` 或 `argSpel`）也必须对应，否则生成的 key 不匹配，evict 清不到缓存。
 
 ```java
 @Service
@@ -196,12 +263,12 @@ public class UserService {
 }
 ```
 
-> **注意**：如果查询方法使用了 `argIndexes`，清除方法也需要设置对应的 `argIndexes`，确保生成的 key 一致。
-> 例如查询方法 `@BingCache(cacheName = "user", argIndexes = {0})`，清除方法也应为 `@BingCacheEvict(cacheName = "user", argIndexes = {0})`。
+> **注意**：查询方法如果使用了 `argIndexes` 或 `argSpel`，清除方法必须设置对应的值。
+> 例如查询方法 `@BingCache(cacheName = "user", argSpel = "#user.id")`，清除方法也应为 `@BingCacheEvict(cacheName = "user", argSpel = "#user.id")`。
 
 ## 缓存 Key 生成规则
 
-格式：`前缀(参数1, 参数2, ...)`
+格式：`前缀(参数部分)`
 
 ### 前缀优先级
 
@@ -209,37 +276,31 @@ public class UserService {
 2. **`keyPrefix`** — 如 `user:detail`
 3. **默认** — 类全限定名.方法名，如 `com.example.UserService.getUserById`
 
+### 参数选取方式
+
+优先级：`argSpel` > `argIndexes` > 全量参数
+
+| 方式 | 说明 | 示例 |
+|------|------|------|
+| `argSpel` | SpEL 表达式，从参数中选取值 | `argSpel = "#user.id"` → `user(1)` |
+| `argIndexes` | 按索引选取整个参数 | `argIndexes = {0, 2}` → `prefix([a, 3])` |
+| 全量参数（默认） | 所有参数序列化 | `prefix([a, 2, 3])` |
+
 ### 参数序列化
 
 | 参数类型 | 序列化方式 | 示例 |
 |----------|-----------|------|
 | null | 字符串 `"null"` | `user([null])` |
-| Number / Boolean / Character / String | `String.valueOf()` | `user([42])`、`user([true])`、`user([Alice])` |
+| Number / Boolean / Character / String | `String.valueOf()` | `user([42])`、`user([true])` |
 | 数组 | `Arrays.deepToString()` | `user([[1, 2, 3]])` |
 | 自定义对象 | Jackson JSON 序列化 | `user([{"id":1,"name":"Alice"}])` |
 
 > 自定义对象使用 Jackson 序列化而非 `toString()`，确保不同实例和 JVM 重启后 key 一致。
-> Jackson 序列化失败时直接抛 `IllegalStateException`（而非降级为 `hashCode()`，后者对未重写 `hashCode` 的对象走 identity hashCode，重启后会变化，破坏 key 一致性）。
+> Jackson 序列化失败时直接抛 `IllegalStateException`（而非降级为 `hashCode()`）。
 
 ### Key 长度限制
 
 生成的 key 最大长度为 **256 个字符**。超过时自动截断参数部分并追加截断哈希后缀（`...#` + SHA-256 前 16 位十六进制字符），保证截断后的 key 仍然唯一。
-
-### 示例
-
-```java
-@BingCache(cacheName = "user", expireTime = 60)
-public UserVO getUserById(Long id) { ... }
-// 调用 getUserById(1L) → key: "user([1])"
-
-@BingCache(keyPrefix = "user:list", argIndexes = {0}, expireTime = 300)
-public List<UserVO> getUserList(UserQueryVO query, HttpServletRequest request) { ... }
-// 调用 getUserList(query, req) → key: "user:list([{"page":1,"size":10}])"
-
-@BingCache(expireTime = 3600)
-public List<DictVO> getDictList(String dictType) { ... }
-// 调用 getDictList("sys_config") → key: "com.example.DictService.getDictList([sys_config])"
-```
 
 ## 缓存架构
 
@@ -452,42 +513,6 @@ public class CacheController {
 }
 ```
 
-## null 值处理
-
-### 默认行为（不缓存 null）
-
-`@BingCache` 默认 `cacheNullValue = false`，方法返回 `null` 时不缓存，每次调用都会重新执行方法：
-
-```java
-@BingCache(cacheName = "user", expireTime = 60)
-public UserVO getUserById(Long id) {
-  // 如果 id 不存在返回 null，不会缓存，下次查询仍执行方法
-  return userMapper.selectById(id);
-}
-```
-
-### 缓存 null（防缓存穿透）
-
-当大量请求查询不存在的数据时，每次都会穿透到数据库。设置 `cacheNullValue = true` 可以缓存 null 结果：
-
-```java
-@BingCache(cacheName = "user", expireTime = 60, cacheNullValue = true)
-public UserVO getUserById(Long id) {
-  // id 不存在时返回 null，会被缓存，下次查询直接返回 null（不执行方法）
-  return userMapper.selectById(id);
-}
-```
-
-> 内部使用 `BingCacheNullValue.INSTANCE` 占位符存储，因为 Caffeine 不支持缓存 null 值。读取时自动还原为 null 返回给调用方。NullValue 只存 L1 不存 L2（Jackson 无法反序列化包私有类）。
->
-> **⚠️ 跨实例限制**：由于 NullValue 不写入 L2（Redis），`cacheNullValue = true` 只能在**本实例**缓存 null 结果防穿透。多实例部署下，**每个实例对同一个不存在的 id 会各自回源一次**，之后该实例即命中本地 L1，不会持续穿透（除非 L1 条目过期或被 LRU 驱逐后重新回源一次）。也就是说 N 个实例对同一个不存在的 id 总共回源 N 次（而非 1 次），之后各实例稳定命中 L1。
->
-> 如果希望跨实例共享 null 缓存（每个 id 全集群只回源一次），建议：
-> - 在业务层用布隆过滤器拦截不存在的 id
-> - 或显式缓存一个"空对象"占位符（如空 `UserVO`，public 类可被 Jackson 序列化写入 L2），而非依赖 null 缓存
->
-> 注意：上述限制针对的是**正常业务场景**（少量不存在的 id 被反复查询）。若面临**恶意穿透攻击**（海量不同 id 各查一次），L1 的 `max-size` 容量限制会导致 NullValue 来不及生效，此时必须用布隆过滤器在入口拦截，无论单实例还是多实例、是否写 L2 都无法仅靠缓存解决。
-
 ## 日志与调试
 
 开启 DEBUG 日志可查看缓存命中情况：
@@ -521,21 +546,19 @@ INFO  Bing Cache: Redis L2 cache has recovered from degradation                 
 
 1. **自调用失效**：同类内部方法调用不会触发 AOP 代理，缓存注解不生效。需通过 Spring 注入的 Bean 调用。
 
-2. **`@BingCache` 与 `@BingCacheEvict` 的 key 必须匹配**：清除缓存时，生成的 key 必须与缓存写入时一致。`cacheName` 相同只保证前缀一致，**参数部分也必须一致**。最常见的问题是：查询方法只有 `id` 一个参数（key 为 `user([1])`），更新方法有 `id` 和 `vo` 两个参数却不加 `argIndexes`（key 变成 `user([1,{"id":1}]）`）——导致 evict 清不到缓存。解决方法：更新方法加 `argIndexes = {0}`，只用 id 生成 key。
+2. **Redis Pub/Sub 不保证送达**：失效消息基于 Redis Pub/Sub 广播，属于 fire-and-forget 模式。极端情况下（如网络抖动），其他实例可能收不到失效通知，导致短时间内读到旧数据。**注意：版本对账机制只补偿 `clear()` 和 `clearByPrefix()` 的 Pub/Sub 丢失，单 key `evict()` 的丢失无法补偿**（详见"版本对账机制 → 对账范围限制"）。建议生产环境设置 `l1-max-ttl` 作为兜底。
 
-3. **Redis Pub/Sub 不保证送达**：失效消息基于 Redis Pub/Sub 广播，属于 fire-and-forget 模式。极端情况下（如网络抖动），其他实例可能收不到失效通知，导致短时间内读到旧数据。**注意：版本对账机制只补偿 `clear()` 和 `clearByPrefix()` 的 Pub/Sub 丢失，单 key `evict()` 的丢失无法补偿**（详见"版本对账机制 → 对账范围限制"）。建议生产环境设置 `l1-max-ttl` 作为兜底。
+3. **适用场景**：本组件适用于读多写少、对缓存一致性要求为最终一致的业务场景（如字典数据、用户信息、配置信息等）。不适合频繁更新且要求强一致性的业务。
 
-4. **适用场景**：本组件适用于读多写少、对缓存一致性要求为最终一致的业务场景（如字典数据、用户信息、配置信息等）。不适合频繁更新且要求强一致性的业务。
+4. **多实例部署**：L1 本地缓存各实例独立，`@BingCacheEvict` 通过 Pub/Sub 通知其他实例清除本地缓存，存在毫秒级延迟。如需强一致，请直接查询数据库。
 
-5. **多实例部署**：L1 本地缓存各实例独立，`@BingCacheEvict` 通过 Pub/Sub 通知其他实例清除本地缓存，存在毫秒级延迟。如需强一致，请直接查询数据库。
+5. **缓存 key 一致性**：手动 `evict()` 时，key 必须和自动生成的完全一致，可从 DEBUG 日志中获取。推荐使用 `@BingCacheEvict` 注解替代手动操作。
 
-6. **缓存 key 一致性**：手动 `evict()` 时，key 必须和自动生成的完全一致，可从 DEBUG 日志中获取。推荐使用 `@BingCacheEvict` 注解替代手动操作。
+6. **Redis 依赖可选**：`spring-boot-starter-data-redis` 的 scope 为 `provided`，由使用者项目按需引入。没有 Redis 依赖时，组件自动以纯 L1 模式运行。
 
-7. **Redis 依赖可选**：`spring-boot-starter-data-redis` 的 scope 为 `provided`，由使用者项目按需引入。没有 Redis 依赖时，组件自动以纯 L1 模式运行。
+7. **`allEntries` 清除范围**：`@BingCacheEvict(allEntries = true)` 配合 `cacheName` 或 `keyPrefix` 时，只清除该前缀下的缓存条目；都不指定时才全局清空。
 
-8. **`allEntries` 清除范围**：`@BingCacheEvict(allEntries = true)` 配合 `cacheName` 或 `keyPrefix` 时，只清除该前缀下的缓存条目；都不指定时才全局清空。
-
-9. **`@BingCacheEvict` 未指定 cacheName/keyPrefix 时会输出警告**：当 `@BingCacheEvict` 既没有设置 `cacheName` 也没有设置 `keyPrefix` 时，默认前缀为当前方法名（如 `updateUser`），而对应的 `@BingCache` 方法默认前缀是其方法名（如 `getUserById`），两者不匹配会导致 evict 静默失效。组件会输出 WARN 日志提醒：
+8. **`@BingCacheEvict` 未指定 cacheName/keyPrefix 时会输出警告**：当 `@BingCacheEvict` 既没有设置 `cacheName` 也没有设置 `keyPrefix` 时，默认前缀为当前方法名（如 `updateUser`），而对应的 `@BingCache` 方法默认前缀是其方法名（如 `getUserById`），两者不匹配会导致 evict 静默失效。组件会输出 WARN 日志提醒：
 
     ```
     WARN @BingCacheEvict on method 'updateUser' has no cacheName or keyPrefix set.

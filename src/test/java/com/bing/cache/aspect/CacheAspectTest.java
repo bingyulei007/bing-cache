@@ -2,12 +2,15 @@ package com.bing.cache.aspect;
 
 import com.bing.cache.annotation.BingCache;
 import com.bing.cache.cache.CaffeineCacheManager;
+import com.bing.cache.util.CacheKeyGenerator;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.EnableAspectJAutoProxy;
+import org.springframework.core.DefaultParameterNameDiscoverer;
+import org.springframework.expression.spel.standard.SpelExpressionParser;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -139,6 +142,81 @@ class CacheAspectTest {
   }
 
   /**
+   * 测试 SpEL key 表达式生成缓存 key 并命中.
+   */
+  @Test
+  void testSpelKeyCacheHit() {
+    try (AnnotationConfigApplicationContext ctx =
+        new AnnotationConfigApplicationContext(TestConfig.class)) {
+      TestService service = ctx.getBean(TestService.class);
+      TestService target = ctx.getBean("testServiceTarget", TestService.class);
+
+      String result1 = service.findByIdSpel(1L);
+      String result2 = service.findByIdSpel(1L);
+
+      assertEquals("user_1", result1);
+      assertEquals(1, target.getCallCount());
+    }
+  }
+
+  /**
+   * 测试 SpEL key 不同参数走不同缓存.
+   */
+  @Test
+  void testSpelKeyDifferentArgsDifferentCache() {
+    try (AnnotationConfigApplicationContext ctx =
+        new AnnotationConfigApplicationContext(TestConfig.class)) {
+      TestService service = ctx.getBean(TestService.class);
+      TestService target = ctx.getBean("testServiceTarget", TestService.class);
+
+      service.findByIdSpel(1L);
+      service.findByIdSpel(2L);
+
+      assertEquals(2, target.getCallCount());
+    }
+  }
+
+  /**
+   * 测试 SpEL key 选取参数对象属性.
+   */
+  @Test
+  void testSpelKeyByProperty() {
+    try (AnnotationConfigApplicationContext ctx =
+        new AnnotationConfigApplicationContext(TestConfig.class)) {
+      TestService service = ctx.getBean(TestService.class);
+      TestService target = ctx.getBean("testServiceTarget", TestService.class);
+
+      SpelTestUser user1 = new SpelTestUser(10L, "Alice");
+      SpelTestUser user2 = new SpelTestUser(10L, "Bob");
+
+      service.findByUserSpel(user1);
+      service.findByUserSpel(user2);
+
+      // key = "spelUser(10)"，不同 name 但相同 id 应命中同一缓存
+      assertEquals(1, target.getCallCount());
+    }
+  }
+
+  /**
+   * 测试 SpEL key 拼接多个参数.
+   */
+  @Test
+  void testSpelKeyConcatMultipleParams() {
+    try (AnnotationConfigApplicationContext ctx =
+        new AnnotationConfigApplicationContext(TestConfig.class)) {
+      TestService service = ctx.getBean(TestService.class);
+      TestService target = ctx.getBean("testServiceTarget", TestService.class);
+
+      service.findMultiSpel("a", 1L);
+      service.findMultiSpel("a", 1L);
+      service.findMultiSpel("b", 1L);
+
+      // "a:1" 命中缓存，"b:1" 未命中
+      assertEquals(2, target.getCallCount());
+    }
+  }
+
+  /**
    * 测试配置类.
    */
   @Configuration
@@ -151,8 +229,15 @@ class CacheAspectTest {
     }
 
     @Bean
-    public CacheAspect cacheAspect(CaffeineCacheManager cacheManager) {
-      return new CacheAspect(cacheManager);
+    public CacheKeyGenerator cacheKeyGenerator() {
+      return new CacheKeyGenerator(
+          new SpelExpressionParser(), new DefaultParameterNameDiscoverer());
+    }
+
+    @Bean
+    public CacheAspect cacheAspect(CaffeineCacheManager cacheManager,
+        CacheKeyGenerator cacheKeyGenerator) {
+      return new CacheAspect(cacheManager, cacheKeyGenerator);
     }
 
     @Bean
@@ -207,8 +292,68 @@ class CacheAspectTest {
       return null;
     }
 
+    /**
+     * 使用 SpEL key 按 ID 查询.
+     *
+     * @param id 用户 ID
+     * @return 用户名
+     */
+    @BingCache(cacheName = "spelUser", argSpel = "#id")
+    public String findByIdSpel(Long id) {
+      callCount++;
+      return "user_" + id;
+    }
+
+    /**
+     * 使用 SpEL key 选取参数对象属性.
+     *
+     * @param user 用户对象
+     * @return 用户名
+     */
+    @BingCache(cacheName = "spelUser", argSpel = "#user.id")
+    public String findByUserSpel(SpelTestUser user) {
+      callCount++;
+      return "user_" + user.getId();
+    }
+
+    /**
+     * 使用 SpEL key 拼接多个参数.
+     *
+     * @param prefix 前缀
+     * @param id     用户 ID
+     * @return 拼接结果
+     */
+    @BingCache(cacheName = "spelMulti", argSpel = "#prefix + ':' + #id")
+    public String findMultiSpel(String prefix, Long id) {
+      callCount++;
+      return prefix + "_" + id;
+    }
+
     public int getCallCount() {
       return callCount;
+    }
+  }
+
+  /**
+   * SpEL key 测试用的用户对象.
+   */
+  static class SpelTestUser {
+
+    private final Long id;
+
+    private final String name;
+
+    SpelTestUser(Long id, String name) {
+      this.id = id;
+      this.name = name;
+    }
+
+    public Long getId() {
+      return id;
+    }
+
+    public String getName() {
+      return name;
     }
   }
 }

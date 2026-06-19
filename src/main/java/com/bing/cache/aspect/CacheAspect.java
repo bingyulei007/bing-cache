@@ -13,6 +13,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.Method;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 缓存切面.
@@ -27,15 +29,27 @@ public class CacheAspect {
 
   private static final Logger LOG = LoggerFactory.getLogger(CacheAspect.class);
 
+  /**
+   * 已警告过的方法，避免重复输出 WARN 日志.
+   *
+   * <p>实例字段（非 static），避免同一 JVM 内多个 Spring 上下文（如集成测试场景）
+   * 共享此集合导致后续上下文不再输出警告日志。</p>
+   */
+  private final Set<String> warnedMethods = ConcurrentHashMap.newKeySet();
+
   private final CacheManager cacheManager;
 
+  private final CacheKeyGenerator cacheKeyGenerator;
+
   /**
-   * 构造方法注入缓存管理器.
+   * 构造方法注入缓存管理器和 key 生成器.
    *
-   * @param cacheManager 缓存管理器
+   * @param cacheManager      缓存管理器
+   * @param cacheKeyGenerator 缓存 key 生成器
    */
-  public CacheAspect(CacheManager cacheManager) {
+  public CacheAspect(CacheManager cacheManager, CacheKeyGenerator cacheKeyGenerator) {
     this.cacheManager = cacheManager;
+    this.cacheKeyGenerator = cacheKeyGenerator;
   }
 
   /**
@@ -51,9 +65,12 @@ public class CacheAspect {
     MethodSignature signature = (MethodSignature) joinPoint.getSignature();
     Method method = signature.getMethod();
     Object[] args = joinPoint.getArgs();
+    Object target = joinPoint.getTarget();
 
-    String key = CacheKeyGenerator.generate(method, args,
-        bingCache.cacheName(), bingCache.keyPrefix(), bingCache.argIndexes());
+    warnIfKeyAndArgIndexesConflict(bingCache, method);
+
+    String key = cacheKeyGenerator.generate(method, args, target,
+        bingCache.cacheName(), bingCache.keyPrefix(), bingCache.argIndexes(), bingCache.argSpel());
 
     // try cache
     Object cached = cacheManager.get(key);
@@ -83,5 +100,24 @@ public class CacheAspect {
     }
 
     return result;
+  }
+
+  /**
+   * 当 argSpel 和 argIndexes 同时设置时输出警告.
+   *
+   * @param bingCache 缓存注解
+   * @param method    目标方法
+   */
+  private void warnIfKeyAndArgIndexesConflict(BingCache bingCache, Method method) {
+    if (!bingCache.argSpel().isEmpty()
+        && bingCache.argIndexes() != null && bingCache.argIndexes().length > 0) {
+      String methodKey = method.getDeclaringClass().getName() + "#" + method.getName()
+          + "#keyConflict";
+      if (warnedMethods.add(methodKey)) {
+        LOG.warn("@BingCache on method '{}' has both argSpel() and argIndexes() set. "
+            + "argSpel (SpEL) takes precedence; argIndexes will be ignored.",
+            method.getName());
+      }
+    }
   }
 }

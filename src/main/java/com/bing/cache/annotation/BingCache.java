@@ -55,9 +55,36 @@ public @interface BingCache {
    * 设置后只有指定索引位置的参数值会被包含在 key 中。
    * 例如 {0, 2} 表示只使用第 1 个和第 3 个参数。</p>
    *
+   * <p>当 {@link #argSpel()} 非空时，此属性被忽略。</p>
+   *
    * @return 参数索引数组
    */
   int[] argIndexes() default {};
+
+  /**
+   * SpEL 表达式，用于从方法参数中选取值参与 key 生成.
+   *
+   * <p>非空时优先于 {@link #argIndexes()}，表达式求值结果作为 key 的参数部分。
+   * 前缀仍由 {@link #cacheName()} 或 {@link #keyPrefix()} 决定。</p>
+   *
+   * <p>表达式中可用的变量（类似 Spring {@code @Cacheable} 的参数变量）：</p>
+   * <ul>
+   *   <li>{@code #参数名} — 按名称引用方法参数，如 {@code #user.id}</li>
+   *   <li>{@code #p0}, {@code #a0} — 按索引引用方法参数</li>
+   *   <li>{@code #root.method} — 当前方法（{@code Method} 对象）</li>
+   *   <li>{@code #root.methodName} — 方法名</li>
+   *   <li>{@code #root.args} — 参数数组</li>
+   *   <li>{@code #root.target} — 目标对象</li>
+   * </ul>
+   *
+   * <p>注意：不支持 {@code #root.targetClass}、{@code #caches} 等 Spring Cache 特有变量。</p>
+   *
+   * <p>示例：{@code argSpel = "#user.id"} 生成形如 {@code cacheName(1)} 的 key。
+   * 求值结果为 null 时序列化为 {@code "null"}，自定义对象使用 Jackson 序列化。</p>
+   *
+   * @return SpEL 表达式，为空时使用 argIndexes
+   */
+  String argSpel() default "";
 
   /**
    * 是否缓存 null 结果.

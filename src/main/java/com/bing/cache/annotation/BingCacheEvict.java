@@ -47,9 +47,24 @@ public @interface BingCacheEvict {
    * <p>默认为空数组，表示所有参数都参与 key 生成，
    * 与 {@link BingCache#argIndexes()} 保持一致。</p>
    *
+   * <p>当 {@link #argSpel()} 非空时，此属性被忽略。</p>
+   *
    * @return 参数索引数组
    */
   int[] argIndexes() default {};
+
+  /**
+   * SpEL 表达式，用于从方法参数中选取值参与 key 生成.
+   *
+   * <p>非空时优先于 {@link #argIndexes()}，表达式求值结果作为 key 的参数部分。
+   * 应与对应的 {@link BingCache#argSpel()} 保持一致，确保 evict 能匹配到缓存 key。</p>
+   *
+   * <p>表达式中可用的变量与 {@link BingCache#argSpel()} 相同。
+   * {@code allEntries=true} 时此属性不生效。</p>
+   *
+   * @return SpEL 表达式，为空时使用 argIndexes
+   */
+  String argSpel() default "";
 
   /**
    * 是否清空所有缓存.

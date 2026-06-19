@@ -11,6 +11,7 @@ import com.bing.cache.cache.CaffeineCacheManager;
 import com.bing.cache.cache.CompositeCacheManager;
 import com.bing.cache.cache.RedisCacheInvalidationPublisher;
 import com.bing.cache.cache.RedisCacheManager;
+import com.bing.cache.util.CacheKeyGenerator;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,6 +25,8 @@ import org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.DefaultParameterNameDiscoverer;
+import org.springframework.core.ParameterNameDiscoverer;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -32,6 +35,7 @@ import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 import org.springframework.data.redis.listener.adapter.MessageListenerAdapter;
 import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSerializer;
 import org.springframework.data.redis.serializer.StringRedisSerializer;
+import org.springframework.expression.spel.standard.SpelExpressionParser;
 
 import java.util.UUID;
 
@@ -191,27 +195,48 @@ public class BingCacheAutoConfiguration {
   }
 
   /**
+   * 注册缓存 key 生成器.
+   *
+   * <p>内置 SpEL 解析器和参数名发现器，支持通过 {@code argSpel} SpEL 表达式选取参数。
+   * 用户可通过自定义 {@link CacheKeyGenerator} Bean 覆盖（如需替换 SpEL 解析器或参数名发现器）。</p>
+   *
+   * @param parameterNameDiscovererProvider 方法参数名发现器（可选注入，未提供时使用 DefaultParameterNameDiscoverer）
+   * @return CacheKeyGenerator 实例
+   */
+  @Bean
+  @ConditionalOnMissingBean
+  public CacheKeyGenerator cacheKeyGenerator(
+      ObjectProvider<ParameterNameDiscoverer> parameterNameDiscovererProvider) {
+    ParameterNameDiscoverer discoverer = parameterNameDiscovererProvider.getIfAvailable(
+        DefaultParameterNameDiscoverer::new);
+    return new CacheKeyGenerator(new SpelExpressionParser(), discoverer);
+  }
+
+  /**
    * 注册缓存切面.
    *
-   * @param cacheManager 缓存管理器
+   * @param cacheManager      缓存管理器
+   * @param cacheKeyGenerator 缓存 key 生成器
    * @return CacheAspect 实例
    */
   @Bean
   @ConditionalOnMissingBean
-  public CacheAspect cacheAspect(CacheManager cacheManager) {
-    return new CacheAspect(cacheManager);
+  public CacheAspect cacheAspect(CacheManager cacheManager, CacheKeyGenerator cacheKeyGenerator) {
+    return new CacheAspect(cacheManager, cacheKeyGenerator);
   }
 
   /**
    * 注册缓存清除切面.
    *
-   * @param cacheManager 缓存管理器
+   * @param cacheManager      缓存管理器
+   * @param cacheKeyGenerator 缓存 key 生成器
    * @return CacheEvictAspect 实例
    */
   @Bean
   @ConditionalOnMissingBean
-  public CacheEvictAspect cacheEvictAspect(CacheManager cacheManager) {
-    return new CacheEvictAspect(cacheManager);
+  public CacheEvictAspect cacheEvictAspect(CacheManager cacheManager,
+      CacheKeyGenerator cacheKeyGenerator) {
+    return new CacheEvictAspect(cacheManager, cacheKeyGenerator);
   }
 
   /**

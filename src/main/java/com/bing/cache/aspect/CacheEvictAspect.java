@@ -36,13 +36,17 @@ public class CacheEvictAspect {
 
   private final CacheManager cacheManager;
 
+  private final CacheKeyGenerator cacheKeyGenerator;
+
   /**
-   * 构造方法注入缓存管理器.
+   * 构造方法注入缓存管理器和 key 生成器.
    *
-   * @param cacheManager 缓存管理器
+   * @param cacheManager      缓存管理器
+   * @param cacheKeyGenerator 缓存 key 生成器
    */
-  public CacheEvictAspect(CacheManager cacheManager) {
+  public CacheEvictAspect(CacheManager cacheManager, CacheKeyGenerator cacheKeyGenerator) {
     this.cacheManager = cacheManager;
+    this.cacheKeyGenerator = cacheKeyGenerator;
   }
 
   /**
@@ -59,6 +63,7 @@ public class CacheEvictAspect {
     MethodSignature signature = (MethodSignature) joinPoint.getSignature();
     Method method = signature.getMethod();
     Object[] args = joinPoint.getArgs();
+    Object target = joinPoint.getTarget();
 
     // 未指定 cacheName 或 keyPrefix 时，默认前缀为当前方法名，可能与 @BingCache 的方法名不匹配
     // 每个方法只警告一次，避免高频调用时日志风暴
@@ -74,8 +79,22 @@ public class CacheEvictAspect {
       }
     }
 
+    // argSpel 和 argIndexes 同时设置时，argSpel 优先，警告一次
+    if (!bingCacheEvict.allEntries()
+        && !bingCacheEvict.argSpel().isEmpty()
+        && bingCacheEvict.argIndexes() != null && bingCacheEvict.argIndexes().length > 0) {
+      String methodKey = method.getDeclaringClass().getName() + "#" + method.getName()
+          + "#keyConflict";
+      if (warnedMethods.add(methodKey)) {
+        LOG.warn("@BingCacheEvict on method '{}' has both argSpel() and argIndexes() set. "
+            + "argSpel (SpEL) takes precedence; argIndexes will be ignored.",
+            method.getName());
+      }
+    }
+
     // argIndexes 为空且方法有多个参数时，提醒检查 key 是否与 @BingCache 匹配
     if (!bingCacheEvict.allEntries()
+        && bingCacheEvict.argSpel().isEmpty()
         && (bingCacheEvict.argIndexes() == null || bingCacheEvict.argIndexes().length == 0)
         && method.getParameterCount() > 1) {
       String methodKey = method.getDeclaringClass().getName() + "#" + method.getName()
@@ -91,9 +110,10 @@ public class CacheEvictAspect {
     }
 
     // allEntries=true 时不需要生成 key，避免无意义的 key 生成和潜在的 argIndexes 越界异常
-    String key = bingCacheEvict.allEntries() ? null : CacheKeyGenerator.generate(method, args,
-        bingCacheEvict.cacheName(), bingCacheEvict.keyPrefix(),
-        bingCacheEvict.argIndexes());
+    String key = bingCacheEvict.allEntries() ? null
+        : cacheKeyGenerator.generate(method, args, target,
+            bingCacheEvict.cacheName(), bingCacheEvict.keyPrefix(),
+            bingCacheEvict.argIndexes(), bingCacheEvict.argSpel());
 
     if (bingCacheEvict.beforeInvocation()) {
       doEvict(bingCacheEvict, key);

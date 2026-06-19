@@ -3,6 +3,7 @@ package com.bing.cache.aspect;
 import com.bing.cache.annotation.BingCache;
 import com.bing.cache.annotation.BingCacheEvict;
 import com.bing.cache.cache.CaffeineCacheManager;
+import com.bing.cache.util.CacheKeyGenerator;
 
 import org.junit.jupiter.api.Test;
 
@@ -10,6 +11,8 @@ import org.springframework.context.annotation.AnnotationConfigApplicationContext
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.EnableAspectJAutoProxy;
+import org.springframework.core.DefaultParameterNameDiscoverer;
+import org.springframework.expression.spel.standard.SpelExpressionParser;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -239,6 +242,74 @@ class CacheEvictAspectTest {
   }
 
   /**
+   * 测试 SpEL key：@BingCache 缓存后，@BingCacheEvict 用相同 SpEL key 清除.
+   */
+  @Test
+  void testEvictWithSpelKey() {
+    try (AnnotationConfigApplicationContext ctx =
+        new AnnotationConfigApplicationContext(TestConfig.class)) {
+      TestService service = ctx.getBean(TestService.class);
+      CaffeineCacheManager cacheManager = ctx.getBean(CaffeineCacheManager.class);
+
+      // 使用 SpEL key 缓存
+      service.findBySpelKey(1L);
+      String cacheKey = "spelCache(1)";
+      assertEquals("user_1", cacheManager.get(cacheKey));
+
+      // 使用相同 SpEL key 清除
+      service.updateBySpelKey(1L);
+      assertNull(cacheManager.get(cacheKey));
+    }
+  }
+
+  /**
+   * 测试 SpEL key 选取参数属性进行 evict.
+   */
+  @Test
+  void testEvictWithSpelKeyByProperty() {
+    try (AnnotationConfigApplicationContext ctx =
+        new AnnotationConfigApplicationContext(TestConfig.class)) {
+      TestService service = ctx.getBean(TestService.class);
+      CaffeineCacheManager cacheManager = ctx.getBean(CaffeineCacheManager.class);
+
+      SpelTestUser user = new SpelTestUser(99L, "Alice");
+      service.findBySpelUser(user);
+      String cacheKey = "spelUser(99)";
+      assertEquals("user_99", cacheManager.get(cacheKey));
+
+      // 用相同 id 的不同对象 evict
+      SpelTestUser user2 = new SpelTestUser(99L, "Bob");
+      service.updateBySpelUser(user2);
+      assertNull(cacheManager.get(cacheKey));
+    }
+  }
+
+  /**
+   * 测试 SpEL key 不同参数值 evict 不同缓存.
+   */
+  @Test
+  void testEvictWithSpelKeyDifferentArgs() {
+    try (AnnotationConfigApplicationContext ctx =
+        new AnnotationConfigApplicationContext(TestConfig.class)) {
+      TestService service = ctx.getBean(TestService.class);
+      CaffeineCacheManager cacheManager = ctx.getBean(CaffeineCacheManager.class);
+
+      service.findBySpelKey(1L);
+      service.findBySpelKey(2L);
+      String key1 = "spelCache(1)";
+      String key2 = "spelCache(2)";
+      assertEquals("user_1", cacheManager.get(key1));
+      assertEquals("user_2", cacheManager.get(key2));
+
+      // 只清除 key1
+      service.updateBySpelKey(1L);
+      assertNull(cacheManager.get(key1));
+      // key2 不受影响
+      assertEquals("user_2", cacheManager.get(key2));
+    }
+  }
+
+  /**
    * 测试配置类.
    */
   @Configuration
@@ -251,13 +322,21 @@ class CacheEvictAspectTest {
     }
 
     @Bean
-    public CacheAspect cacheAspect(CaffeineCacheManager cacheManager) {
-      return new CacheAspect(cacheManager);
+    public CacheKeyGenerator cacheKeyGenerator() {
+      return new CacheKeyGenerator(
+          new SpelExpressionParser(), new DefaultParameterNameDiscoverer());
     }
 
     @Bean
-    public CacheEvictAspect cacheEvictAspect(CaffeineCacheManager cacheManager) {
-      return new CacheEvictAspect(cacheManager);
+    public CacheAspect cacheAspect(CaffeineCacheManager cacheManager,
+        CacheKeyGenerator cacheKeyGenerator) {
+      return new CacheAspect(cacheManager, cacheKeyGenerator);
+    }
+
+    @Bean
+    public CacheEvictAspect cacheEvictAspect(CaffeineCacheManager cacheManager,
+        CacheKeyGenerator cacheKeyGenerator) {
+      return new CacheEvictAspect(cacheManager, cacheKeyGenerator);
     }
 
     @Bean
@@ -404,8 +483,75 @@ class CacheEvictAspectTest {
       callCount++;
     }
 
+    /**
+     * 使用 SpEL key 缓存.
+     *
+     * @param id 用户 ID
+     * @return 用户名
+     */
+    @BingCache(cacheName = "spelCache", argSpel = "#id")
+    public String findBySpelKey(Long id) {
+      callCount++;
+      return "user_" + id;
+    }
+
+    /**
+     * 使用 SpEL key 清除缓存.
+     *
+     * @param id 用户 ID
+     */
+    @BingCacheEvict(cacheName = "spelCache", argSpel = "#id")
+    public void updateBySpelKey(Long id) {
+      callCount++;
+    }
+
+    /**
+     * 使用 SpEL key 选取对象属性缓存.
+     *
+     * @param user 用户对象
+     * @return 用户名
+     */
+    @BingCache(cacheName = "spelUser", argSpel = "#user.id")
+    public String findBySpelUser(SpelTestUser user) {
+      callCount++;
+      return "user_" + user.getId();
+    }
+
+    /**
+     * 使用 SpEL key 选取对象属性清除缓存.
+     *
+     * @param user 用户对象
+     */
+    @BingCacheEvict(cacheName = "spelUser", argSpel = "#user.id")
+    public void updateBySpelUser(SpelTestUser user) {
+      callCount++;
+    }
+
     public int getCallCount() {
       return callCount;
+    }
+  }
+
+  /**
+   * SpEL key 测试用的用户对象.
+   */
+  static class SpelTestUser {
+
+    private final Long id;
+
+    private final String name;
+
+    SpelTestUser(Long id, String name) {
+      this.id = id;
+      this.name = name;
+    }
+
+    public Long getId() {
+      return id;
+    }
+
+    public String getName() {
+      return name;
     }
   }
 }
