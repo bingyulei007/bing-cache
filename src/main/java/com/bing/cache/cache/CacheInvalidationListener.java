@@ -44,6 +44,10 @@ public class CacheInvalidationListener {
   public void handleMessage(String messageJson) {
     try {
       CacheInvalidationMessage message = CacheInvalidationMessage.fromJson(messageJson);
+      if (message.getType() == null) {
+        LOG.warn("Invalid cache invalidation message, type is null: {}", messageJson);
+        return;
+      }
       if (Objects.equals(instanceId, message.getInstanceId())) {
         LOG.debug("Ignoring self-published cache invalidation: type={}, key={}",
             message.getType(), message.getKey());

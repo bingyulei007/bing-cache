@@ -22,8 +22,9 @@ public @interface BingCacheEvict {
   /**
    * 缓存名称，用于读写注解共享同一前缀.
    *
-   * <p>与 {@link BingCache#cacheName()} 指定相同值即可确保
-   * 清除注解能匹配到缓存注解生成的 key。
+   * <p>与 {@link BingCache#cacheName()} 指定相同值可确保缓存前缀一致。
+   * 要精确清除缓存，参数部分（{@link #argIndexes()} 或 {@link #argSpel()}）
+   * 也必须与对应的 {@link BingCache} 保持一致，否则生成的 key 不匹配。
    * 优先级高于 {@link #keyPrefix()}。</p>
    *
    * @return 缓存名称

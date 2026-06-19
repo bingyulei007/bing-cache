@@ -17,6 +17,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.AutoConfigureAfter;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -299,6 +300,24 @@ public class BingCacheAutoConfiguration {
     }
 
     /**
+     * 注册 Redis Pub/Sub 消息监听适配器.
+     *
+     * <p>显式调用 {@link MessageListenerAdapter#afterPropertiesSet()} 初始化内部
+     * MethodInvoker，避免容器收到消息时因 invoker 未初始化而抛出 NPE。</p>
+     *
+     * @param listener 缓存失效监听器
+     * @return 已初始化的 MessageListenerAdapter
+     */
+    @Bean("bingCacheInvalidationMessageListenerAdapter")
+    @ConditionalOnMissingBean(name = "bingCacheInvalidationMessageListenerAdapter")
+    public MessageListenerAdapter cacheInvalidationMessageListenerAdapter(
+        CacheInvalidationListener listener) {
+      MessageListenerAdapter adapter = new MessageListenerAdapter(listener, "handleMessage");
+      adapter.afterPropertiesSet();
+      return adapter;
+    }
+
+    /**
      * 注册 Redis Pub/Sub 消息监听容器.
      *
      * <p>订阅缓存失效频道，收到消息后调用
@@ -306,7 +325,7 @@ public class BingCacheAutoConfiguration {
      *
      * @param connectionFactory Redis 连接工厂
      * @param properties        缓存配置属性
-     * @param listener          缓存失效监听器
+     * @param adapter           缓存失效消息监听适配器
      * @return RedisMessageListenerContainer 实例
      */
     @Bean("bingCacheInvalidationListenerContainer")
@@ -314,10 +333,9 @@ public class BingCacheAutoConfiguration {
     public RedisMessageListenerContainer bingCacheInvalidationListenerContainer(
         RedisConnectionFactory connectionFactory,
         BingCacheProperties properties,
-        CacheInvalidationListener listener) {
+        @Qualifier("bingCacheInvalidationMessageListenerAdapter") MessageListenerAdapter adapter) {
       RedisMessageListenerContainer container = new RedisMessageListenerContainer();
       container.setConnectionFactory(connectionFactory);
-      MessageListenerAdapter adapter = new MessageListenerAdapter(listener, "handleMessage");
       container.addMessageListener(adapter,
           new PatternTopic(properties.getRedis().getChannelName()));
       REDIS_LOG.info("Bing Cache: Redis Pub/Sub listener registered on channel: {}",

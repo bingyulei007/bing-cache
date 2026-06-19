@@ -2,6 +2,8 @@ package com.bing.cache.config;
 
 import com.bing.cache.aspect.CacheAspect;
 import com.bing.cache.aspect.CacheEvictAspect;
+import com.bing.cache.cache.CacheInvalidationListener;
+import com.bing.cache.cache.CacheInvalidationMessage;
 import com.bing.cache.cache.CacheManager;
 import com.bing.cache.cache.CaffeineCacheManager;
 import com.bing.cache.cache.CompositeCacheManager;
@@ -12,9 +14,14 @@ import org.mockito.Mockito;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.data.redis.connection.DefaultMessage;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.listener.adapter.MessageListenerAdapter;
 
+import java.nio.charset.StandardCharsets;
+
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -121,5 +128,24 @@ class BingCacheAutoConfigurationTest {
 
     assertTrue(cm instanceof CaffeineCacheManager);
     assertEquals(0L, ((CaffeineCacheManager) cm).getL1MaxTtlSeconds());
+  }
+
+  /**
+   * 测试 Redis Pub/Sub 监听适配器已完成初始化，收到消息时不会因 invoker 为空抛出 NPE.
+   */
+  @Test
+  void testCacheInvalidationMessageListenerAdapterInitialized() {
+    BingCacheAutoConfiguration.RedisConfiguration config =
+        new BingCacheAutoConfiguration.RedisConfiguration();
+    CacheInvalidationListener listener = new CacheInvalidationListener(
+        Mockito.mock(CacheManager.class), "self-instance");
+
+    MessageListenerAdapter adapter =
+        config.cacheInvalidationMessageListenerAdapter(listener);
+    byte[] body = CacheInvalidationMessage.clear("self-instance")
+        .toJson().getBytes(StandardCharsets.UTF_8);
+
+    assertDoesNotThrow(() -> adapter.onMessage(
+        new DefaultMessage("demo-channel".getBytes(StandardCharsets.UTF_8), body), null));
   }
 }

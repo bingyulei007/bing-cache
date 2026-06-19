@@ -229,9 +229,9 @@ public void deleteUser(UserVO user) { ... }
 
 ### 配对使用
 
-`cacheName` 是两个注解之间的桥梁——只要 `cacheName` 相同，清除操作就能精准匹配缓存条目。
+`cacheName` 是两个注解之间的桥梁，用来让读写注解共享同一个缓存前缀。
 
-**⚠️ 重要：参数部分也必须一致。** `cacheName` 相同只保证前缀一致，参数部分（`argIndexes` 或 `argSpel`）也必须对应，否则生成的 key 不匹配，evict 清不到缓存。
+**⚠️ 重要：参数部分也必须一致。** `cacheName` 相同只保证前缀一致，参数部分（`argIndexes` 或 `argSpel`）也必须对应，否则生成的 key 不匹配，evict 清不到缓存；不会自动降级为按 `cacheName` 批量清除。
 
 ```java
 @Service

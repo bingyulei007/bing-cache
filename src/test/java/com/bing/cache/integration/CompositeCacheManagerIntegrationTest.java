@@ -12,6 +12,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.testcontainers.junit.jupiter.Testcontainers;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
@@ -32,6 +33,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
  * <p>使用嵌入式 Redis (GenericContainer) 验证 L1+L2 二级缓存
  * 的完整读写和 Pub/Sub 跨实例失效功能。</p>
  */
+@Testcontainers(disabledWithoutDocker = true)
 class CompositeCacheManagerIntegrationTest {
 
   private static final String KEY_PREFIX = "bing-cache:";
@@ -160,6 +162,7 @@ class CompositeCacheManagerIntegrationTest {
     CacheInvalidationListener listener2 = new CacheInvalidationListener(l1Instance2,
         "instance-2");
     MessageListenerAdapter adapter = new MessageListenerAdapter(listener2, "handleMessage");
+    adapter.afterPropertiesSet();
     RedisMessageListenerContainer container = new RedisMessageListenerContainer();
     container.setConnectionFactory(connectionFactory2);
     container.addMessageListener(adapter, new PatternTopic(CHANNEL_NAME));

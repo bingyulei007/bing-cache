@@ -9,6 +9,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.testcontainers.junit.jupiter.Testcontainers;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
@@ -22,6 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
  *
  * <p>使用 Testcontainers 启动真实 Redis，验证版本对账的端到端行为。</p>
  */
+@Testcontainers(disabledWithoutDocker = true)
 class ReconciliationIntegrationTest {
 
   private static final String VERSION_KEY_PREFIX = "bing-cache:version:";
