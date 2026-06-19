@@ -43,3 +43,6 @@ build/
 
 ### Docs ###
 docs/
+
+### Claude local settings ###
+.claude/settings.local.json
