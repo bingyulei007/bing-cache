@@ -1,6 +1,7 @@
 package com.bing.cache.config;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -23,6 +24,10 @@ import org.springframework.validation.annotation.Validated;
  *       enabled: true
  *       key-prefix: "myapp:cache:"
  *       channel-name: "myapp:cache:invalidation"
+ *       scan-count: 1000
+ *       delete-batch-size: 500
+ *       use-unlink: true
+ *       failure-log-interval: 30
  *     reconciliation:
  *       enabled: true
  *       interval: 30
@@ -141,6 +146,44 @@ public class BingCacheProperties {
      */
     private String channelName = "bing-cache:invalidation";
 
+    /**
+     * SCAN 命令每次迭代返回的 key 数量.
+     *
+     * <p>用于前缀清除操作（clearByPrefix）时，控制 Redis SCAN 命令的 COUNT 参数。
+     * 值越大迭代次数越少但单次扫描开销越大，建议在 100-10000 之间调整。</p>
+     */
+    @Min(1)
+    @Max(100000)
+    private long scanCount = 1000L;
+
+    /**
+     * UNLINK/DEL 批量删除的批次大小.
+     *
+     * <p>执行前缀清除时，批量删除操作每批次处理的 key 数量。
+     * 较大批次可减少网络往返，但可能导致 Redis 阻塞时间增加。</p>
+     */
+    @Min(1)
+    @Max(10000)
+    private long deleteBatchSize = 500L;
+
+    /**
+     * 是否使用 UNLINK 而非 DEL 删除 key.
+     *
+     * <p>UNLINK 在 Redis 4.0+ 中可用，采用异步非阻塞删除，
+     * 大 key 删除时不阻塞主线程。设为 false 则退化为 DEL 同步删除。</p>
+     */
+    private boolean useUnlink = true;
+
+    /**
+     * Redis 操作失败日志的间隔秒数.
+     *
+     * <p>用于抑制相同类型错误的重复日志输出，避免日志风暴。
+     * 同一类型的错误在该间隔内只记录一次 WARN 日志。</p>
+     */
+    @Min(1)
+    @Max(86400)
+    private long failureLogInterval = 30L;
+
     public boolean isEnabled() {
       return enabled;
     }
@@ -163,6 +206,38 @@ public class BingCacheProperties {
 
     public void setChannelName(String channelName) {
       this.channelName = channelName;
+    }
+
+    public long getScanCount() {
+      return scanCount;
+    }
+
+    public void setScanCount(long scanCount) {
+      this.scanCount = scanCount;
+    }
+
+    public long getDeleteBatchSize() {
+      return deleteBatchSize;
+    }
+
+    public void setDeleteBatchSize(long deleteBatchSize) {
+      this.deleteBatchSize = deleteBatchSize;
+    }
+
+    public boolean isUseUnlink() {
+      return useUnlink;
+    }
+
+    public void setUseUnlink(boolean useUnlink) {
+      this.useUnlink = useUnlink;
+    }
+
+    public long getFailureLogInterval() {
+      return failureLogInterval;
+    }
+
+    public void setFailureLogInterval(long failureLogInterval) {
+      this.failureLogInterval = failureLogInterval;
     }
   }
 

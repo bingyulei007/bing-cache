@@ -132,6 +132,17 @@ public class CompositeCacheManager implements CacheManager {
   }
 
   /**
+   * 获取 L2 Redis 缓存管理器.
+   *
+   * <p>供测试和监控获取 L2 实例以验证配置和检查状态。</p>
+   *
+   * @return L2 Redis 缓存管理器
+   */
+  public RedisCacheManager getL2CacheManager() {
+    return l2CacheManager;
+  }
+
+  /**
    * L2 回填 L1，处理竞态场景.
    *
    * <p>回填时通过 Redis TTL 命令获取 L2 的剩余过期时间：

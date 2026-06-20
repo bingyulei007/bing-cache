@@ -194,4 +194,25 @@
       </plugin>
     </plugins>
   </build>
+
+  <profiles>
+    <profile>
+      <id>boot-3.2</id>
+      <properties>
+        <spring-boot.version>3.2.12</spring-boot.version>
+      </properties>
+    </profile>
+    <profile>
+      <id>boot-3.3</id>
+      <properties>
+        <spring-boot.version>3.3.13</spring-boot.version>
+      </properties>
+    </profile>
+    <profile>
+      <id>boot-3.5</id>
+      <properties>
+        <spring-boot.version>3.5.13</spring-boot.version>
+      </properties>
+    </profile>
+  </profiles>
 </project>

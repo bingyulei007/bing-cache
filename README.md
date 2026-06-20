@@ -432,6 +432,10 @@ bing:
       enabled: true                     # 是否启用 L2 Redis 缓存（默认 true）
       key-prefix: "bing-cache:"         # Redis key 前缀（默认 bing-cache:）
       channel-name: "bing-cache:invalidation"  # Pub/Sub 频道名称（默认 bing-cache:invalidation）
+      scan-count: 1000                 # Redis SCAN count hint（默认 1000）
+      delete-batch-size: 500           # Redis 批量删除每批 key 数（默认 500）
+      use-unlink: true                 # 优先使用 UNLINK 异步删除，失败自动降级 DEL（默认 true）
+      failure-log-interval: 30         # Redis 降级期间失败日志限流间隔秒数（默认 30）
     reconciliation:
       enabled: true                     # 是否启用版本对账（默认 true）
       interval: 30                      # 对账间隔秒数（默认 30）
@@ -446,6 +450,10 @@ bing:
 | `bing.cache.redis.enabled` | `true` | 是否启用 L2 Redis 缓存。仅在 classpath 存在 Redis 依赖且连接可用时生效；跨实例 `evict()` / `@BingCacheEvict` 失效通知依赖该模式下的 Redis Pub/Sub |
 | `bing.cache.redis.key-prefix` | `bing-cache:` | Redis 中缓存 key 的前缀，用于命名空间隔离 |
 | `bing.cache.redis.channel-name` | `bing-cache:invalidation` | 缓存失效通知的 Redis Pub/Sub 频道名称，仅在启用 L2 Redis 缓存时生效 |
+| `bing.cache.redis.scan-count` | `1000` | Redis SCAN count hint，用于 `clear()` / `clearByPrefix()` 扫描 key |
+| `bing.cache.redis.delete-batch-size` | `500` | Redis 清理时每批删除 key 数量，避免一次性删除过多 key |
+| `bing.cache.redis.use-unlink` | `true` | 清理 Redis key 时优先使用 `UNLINK` 异步删除；命令失败时本次清理自动降级为 `DEL` |
+| `bing.cache.redis.failure-log-interval` | `30` | Redis 降级期间重复失败日志的最小输出间隔，单位秒 |
 | `bing.cache.reconciliation.enabled` | `true` | 是否启用版本对账，补偿 Pub/Sub 消息丢失 |
 | `bing.cache.reconciliation.interval` | `30` | 版本对账间隔秒数 |
 
@@ -598,6 +606,14 @@ INFO  Bing Cache: Redis L2 cache has recovered from degradation                 
 | JDK | Java 17+ | 发布产物使用 `--release 17` 编译，可在 JDK 17 及以上版本运行 |
 | Spring Boot | 3.x | 当前测试/依赖管理基线为 Spring Boot 3.5.13；面向 Spring Boot 3.x / Spring Framework 6.x / Jakarta 体系 |
 | Spring Boot 2.x | 不支持 | Spring Boot 2.x 仍以 `javax.*` 体系为主，与当前模块使用的 Spring Boot 3 / Jakarta 依赖体系不匹配 |
+
+本地可通过 Maven profiles 验证不同 Spring Boot 3.x 基线：
+
+```bash
+mvn clean test -Pboot-3.2
+mvn clean test -Pboot-3.3
+mvn clean test -Pboot-3.5
+```
 
 ## 技术栈
 

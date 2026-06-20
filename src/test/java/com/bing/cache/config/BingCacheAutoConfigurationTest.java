@@ -8,6 +8,7 @@ import com.bing.cache.cache.CacheManager;
 import com.bing.cache.cache.CaffeineCacheManager;
 import com.bing.cache.cache.CompositeCacheManager;
 import com.bing.cache.cache.CacheVersionStore;
+import com.bing.cache.cache.RedisCacheManager;
 
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
@@ -147,5 +148,72 @@ class BingCacheAutoConfigurationTest {
 
     assertDoesNotThrow(() -> adapter.onMessage(
         new DefaultMessage("demo-channel".getBytes(StandardCharsets.UTF_8), body), null));
+  }
+
+  /**
+   * 测试 Redis 性能相关配置属性正确注入到 RedisCacheManager.
+   *
+   * <p>验证 scanCount、deleteBatchSize、useUnlink、failureLogInterval 四个属性
+   * 从 BingCacheProperties 正确传递到 RedisCacheManager 实例。</p>
+   */
+  @Test
+  void testRedisPerformancePropertiesInjected() {
+    BingCacheAutoConfiguration config = new BingCacheAutoConfiguration();
+    BingCacheProperties props = new BingCacheProperties();
+    // 设置自定义性能属性
+    props.getRedis().setScanCount(2000L);
+    props.getRedis().setDeleteBatchSize(250L);
+    props.getRedis().setUseUnlink(false);
+    props.getRedis().setFailureLogInterval(60L);
+
+    @SuppressWarnings("unchecked")
+    ObjectProvider<CacheVersionStore> provider = Mockito.mock(ObjectProvider.class);
+    Mockito.when(provider.getIfAvailable()).thenReturn(null);
+
+    CacheManager cm = config.compositeCacheManager(
+        Mockito.mock(StringRedisTemplate.class),
+        Mockito.mock(RedisTemplate.class),
+        props,
+        "test-instance",
+        provider);
+
+    assertTrue(cm instanceof CompositeCacheManager);
+    RedisCacheManager l2 = ((CompositeCacheManager) cm).getL2CacheManager();
+
+    assertEquals(2000L, l2.getScanCount());
+    assertEquals(250L, l2.getDeleteBatchSize());
+    assertEquals(false, l2.isUseUnlink());
+    assertEquals(60L, l2.getFailureLogInterval());
+  }
+
+  /**
+   * 测试默认 BingCacheProperties 传递给 RedisCacheManager 时使用正确的默认值.
+   *
+   * <p>默认值应为：scanCount=1000, deleteBatchSize=500, useUnlink=true, failureLogInterval=30</p>
+   */
+  @Test
+  void testRedisPerformancePropertiesDefaults() {
+    BingCacheAutoConfiguration config = new BingCacheAutoConfiguration();
+    BingCacheProperties props = new BingCacheProperties();
+    // 使用默认配置，不设置任何自定义值
+
+    @SuppressWarnings("unchecked")
+    ObjectProvider<CacheVersionStore> provider = Mockito.mock(ObjectProvider.class);
+    Mockito.when(provider.getIfAvailable()).thenReturn(null);
+
+    CacheManager cm = config.compositeCacheManager(
+        Mockito.mock(StringRedisTemplate.class),
+        Mockito.mock(RedisTemplate.class),
+        props,
+        "test-instance",
+        provider);
+
+    assertTrue(cm instanceof CompositeCacheManager);
+    RedisCacheManager l2 = ((CompositeCacheManager) cm).getL2CacheManager();
+
+    assertEquals(1000L, l2.getScanCount());
+    assertEquals(500L, l2.getDeleteBatchSize());
+    assertEquals(true, l2.isUseUnlink());
+    assertEquals(30L, l2.getFailureLogInterval());
   }
 }

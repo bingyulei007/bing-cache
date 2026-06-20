@@ -142,7 +142,12 @@ public class BingCacheAutoConfiguration {
         properties.getCaffeine().getMaxSize(),
         effectiveL1MaxTtl);
     RedisCacheManager l2CacheManager = new RedisCacheManager(
-        bingCacheRedisTemplate, properties.getRedis().getKeyPrefix());
+        bingCacheRedisTemplate,
+        properties.getRedis().getKeyPrefix(),
+        properties.getRedis().getScanCount(),
+        properties.getRedis().getDeleteBatchSize(),
+        properties.getRedis().isUseUnlink(),
+        properties.getRedis().getFailureLogInterval());
     CacheInvalidationPublisher publisher = new RedisCacheInvalidationPublisher(
         stringRedisTemplate, properties.getRedis().getChannelName(), bingCacheInstanceId);
 
