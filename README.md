@@ -591,10 +591,18 @@ INFO  Bing Cache: Redis L2 cache has recovered from degradation                 
 
     建议：始终为 `@BingCacheEvict` 指定 `cacheName`，与对应的 `@BingCache` 保持一致。
 
+## 兼容性说明
+
+| 项目 | 支持情况 | 说明 |
+|------|----------|------|
+| JDK | Java 17+ | 发布产物使用 `--release 17` 编译，可在 JDK 17 及以上版本运行 |
+| Spring Boot | 3.x | 当前测试/依赖管理基线为 Spring Boot 3.5.13；面向 Spring Boot 3.x / Spring Framework 6.x / Jakarta 体系 |
+| Spring Boot 2.x | 不支持 | Spring Boot 2.x 仍以 `javax.*` 体系为主，与当前模块使用的 Spring Boot 3 / Jakarta 依赖体系不匹配 |
+
 ## 技术栈
 
-- Java 21
-- Spring Boot 3.5.13
+- Java 17+
+- Spring Boot 3.x（当前测试/依赖管理基线：3.5.13）
 - Caffeine（由 Spring Boot BOM 管理版本）
 - Spring Data Redis（provided scope，使用者提供）
 - AspectJ（由 Spring Boot BOM 管理版本）
