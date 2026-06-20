@@ -418,6 +418,8 @@ Redis 恢复正常后：
 
 降级期间，所有 L2 操作静默失败，缓存自动退化为纯 L1 模式，不影响业务正常运行。
 
+**Flapping 保护**：降级状态下需**连续 3 次成功**操作才判定 Redis 真正恢复并触发恢复回调。期间任何一次失败都会重置成功计数器。这避免了 Redis 在可用/不可用之间快速抖动时反复触发 `recoveryCallback` 清空 L1、引发缓存雪崩。与降级阈值的 3 次失败形成对称设计。
+
 ## 配置属性
 
 通过 `application.yml` 配置，前缀为 `bing.cache`：
@@ -452,7 +454,7 @@ bing:
 | `bing.cache.redis.channel-name` | `bing-cache:invalidation` | 缓存失效通知的 Redis Pub/Sub 频道名称，仅在启用 L2 Redis 缓存时生效 |
 | `bing.cache.redis.scan-count` | `1000` | Redis SCAN count hint，用于 `clear()` / `clearByPrefix()` 扫描 key |
 | `bing.cache.redis.delete-batch-size` | `500` | Redis 清理时每批删除 key 数量，避免一次性删除过多 key |
-| `bing.cache.redis.use-unlink` | `true` | 清理 Redis key 时优先使用 `UNLINK` 异步删除；命令失败时本次清理自动降级为 `DEL` |
+| `bing.cache.redis.use-unlink` | `true` | 清理 Redis key 时优先使用 `UNLINK` 异步删除；UNLINK 失败时当前批次及后续批次自动降级为 `DEL`；DEL 失败时清理中断并触发降级记录（与 L1 降级流程一致） |
 | `bing.cache.redis.failure-log-interval` | `30` | Redis 降级期间重复失败日志的最小输出间隔，单位秒 |
 | `bing.cache.reconciliation.enabled` | `true` | 是否启用版本对账，补偿 Pub/Sub 消息丢失 |
 | `bing.cache.reconciliation.interval` | `30` | 版本对账间隔秒数 |
@@ -588,7 +590,9 @@ INFO  Bing Cache: Redis L2 cache has recovered from degradation                 
 
 8. **`allEntries` 清除范围**：`@BingCacheEvict(allEntries = true)` 配合 `cacheName` 或 `keyPrefix` 时，只清除该前缀下的缓存条目；都不指定时才全局清空。
 
-9. **`@BingCacheEvict` 未指定 cacheName/keyPrefix 时会输出警告**：当 `@BingCacheEvict` 既没有设置 `cacheName` 也没有设置 `keyPrefix` 时，默认前缀为当前方法名（如 `updateUser`），而对应的 `@BingCache` 方法默认前缀是其方法名（如 `getUserById`），两者不匹配会导致 evict 静默失效。组件会输出 WARN 日志提醒：
+9. **`clearByPrefix` 字面前缀语义**：`cacheManager.clearByPrefix(prefix)` 内部对 Redis SCAN 的 glob 结果做 `startsWith` 二次过滤，确保与 `CaffeineCacheManager.clearByPrefix` 的字面前缀语义一致。`prefix` 中的 `*`、`?`、`[`、`]` 等 Redis glob 元字符会被当作字面字符处理，不会展开为通配符。例如 `prefix="user*"` 只匹配字面以 `user*` 开头的 key，不会匹配 `userCache`、`userProfile` 等。
+
+10. **`@BingCacheEvict` 未指定 cacheName/keyPrefix 时会输出警告**：当 `@BingCacheEvict` 既没有设置 `cacheName` 也没有设置 `keyPrefix` 时，默认前缀为当前方法名（如 `updateUser`），而对应的 `@BingCache` 方法默认前缀是其方法名（如 `getUserById`），两者不匹配会导致 evict 静默失效。组件会输出 WARN 日志提醒：
 
     ```
     WARN @BingCacheEvict on method 'updateUser' has no cacheName or keyPrefix set.

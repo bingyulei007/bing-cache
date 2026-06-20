@@ -9,6 +9,7 @@ import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.ScanOptions;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -30,6 +31,9 @@ public class RedisCacheManager implements CacheManager {
   /** 连续失败次数达到此阈值时输出降级警告. */
   private static final int DEGRADATION_THRESHOLD = 3;
 
+  /** 降级状态下连续成功次数达到此阈值时恢复，防止 Redis flapping 反复触发恢复回调. */
+  private static final int RECOVERY_THRESHOLD = 3;
+
   /** SCAN 命令每次迭代返回的 key 数量默认值. */
   private static final long DEFAULT_SCAN_COUNT = 1000L;
 
@@ -47,6 +51,9 @@ public class RedisCacheManager implements CacheManager {
   private final String keyPrefix;
 
   private final AtomicInteger consecutiveFailures = new AtomicInteger(0);
+
+  /** 降级状态下连续成功操作计数器，达到 {@link #RECOVERY_THRESHOLD} 才恢复. */
+  private final AtomicInteger consecutiveSuccesses = new AtomicInteger(0);
 
   private volatile boolean degradationWarned = false;
 
@@ -198,7 +205,8 @@ public class RedisCacheManager implements CacheManager {
   public void clear() {
     try {
       String pattern = keyPrefix + "*";
-      long deleted = scanAndDeleteInBatches(pattern, useUnlink);
+      // clear() 全清本命名空间下所有 key，无需字面前缀二次过滤
+      long deleted = scanAndDeleteInBatches(pattern, null, useUnlink);
       LOG.debug("Redis cache clear: {} keys deleted", deleted);
       recordSuccess();
     } catch (Exception e) {
@@ -209,8 +217,11 @@ public class RedisCacheManager implements CacheManager {
   @Override
   public void clearByPrefix(String prefix) {
     try {
-      String pattern = keyPrefix + prefix + "*";
-      long deleted = scanAndDeleteInBatches(pattern, useUnlink);
+      // 字面前缀：用于 SCAN 后的 Java 端二次过滤，确保与 CaffeineCacheManager 的
+      // startsWith 语义一致，避免 prefix 含 glob 元字符（* ? [ ]）时误匹配。
+      String literalPrefix = keyPrefix + prefix;
+      String pattern = literalPrefix + "*";
+      long deleted = scanAndDeleteInBatches(pattern, literalPrefix, useUnlink);
       LOG.debug("Redis cache clear by prefix {}: {} keys deleted", prefix, deleted);
       recordSuccess();
     } catch (Exception e) {
@@ -233,11 +244,19 @@ public class RedisCacheManager implements CacheManager {
    * 避免一次性加载所有 key 到内存。优先使用 UNLINK（非阻塞删除），
    * 若失败则回退到 DEL 并对后续所有批次继续使用 DEL。</p>
    *
-   * @param pattern    匹配模式
-   * @param useUnlink  是否优先尝试 UNLINK
+   * <p><b>字面前缀二次过滤</b>：当 {@code literalPrefix} 非 null 时，SCAN 返回的每个
+   * key 会先用 {@code String.startsWith(literalPrefix)} 在 Java 端二次校验，确保
+   * 只有字面前缀匹配的 key 被删除。这与 {@link CaffeineCacheManager#clearByPrefix}
+   * 的 {@code startsWith} 语义保持一致，避免 prefix 含 glob 元字符（* ? [ ]）时
+   * Redis SCAN 误匹配其他命名空间的 key。{@code literalPrefix} 为 null 时（如
+   * {@link #clear()} 全清场景）跳过二次过滤。</p>
+   *
+   * @param pattern       Redis SCAN MATCH 模式（粗筛）
+   * @param literalPrefix 字面前缀（null 表示不过滤）
+   * @param useUnlink     是否优先尝试 UNLINK
    * @return 实际删除的 key 总数
    */
-  private long scanAndDeleteInBatches(String pattern, boolean useUnlink) {
+  private long scanAndDeleteInBatches(String pattern, String literalPrefix, boolean useUnlink) {
     return redisTemplate.execute((RedisCallback<Long>) connection -> {
       long totalDeleted = 0;
       List<byte[]> batch = new ArrayList<>();
@@ -251,7 +270,17 @@ public class RedisCacheManager implements CacheManager {
 
       try (var cursor = keyCommands.scan(options)) {
         while (cursor.hasNext()) {
-          batch.add(cursor.next());
+          byte[] keyBytes = cursor.next();
+
+          // 字面前缀二次过滤：跳过 glob 误匹配的 key
+          if (literalPrefix != null) {
+            String key = new String(keyBytes, StandardCharsets.UTF_8);
+            if (!key.startsWith(literalPrefix)) {
+              continue;
+            }
+          }
+
+          batch.add(keyBytes);
 
           // 达到批次大小，执行删除
           if (batch.size() >= deleteBatchSize) {
@@ -274,15 +303,13 @@ public class RedisCacheManager implements CacheManager {
   }
 
   /**
-   * 删除单个批次的 key.
+   * 获取 Redis key 命令接口.
    *
-   * <p>优先使用 UNLINK，若失败则输出 WARN 并回退到 DEL。
-   * 一旦 UNLINK 失败，后续批次将直接使用 DEL 不再尝试 UNLINK。</p>
+   * <p>当连接未提供 key 命令时抛出 {@link IllegalStateException}，
+   * 避免后续操作出现 NPE。</p>
    *
-   * @param connection      Redis 连接
-   * @param batch           待删除的 key 字节数组列表
-   * @param keepTryingUnlink 是否尝试 UNLINK（为 false 时直接用 DEL）
-   * @return 批量删除结果（删除数量 + 是否继续尝试 UNLINK）
+   * @param connection Redis 连接
+   * @return Redis key 命令接口
    */
   private RedisKeyCommands keyCommands(RedisConnection connection) {
     RedisKeyCommands keyCommands = connection.keyCommands();
@@ -292,6 +319,23 @@ public class RedisCacheManager implements CacheManager {
     return keyCommands;
   }
 
+  /**
+   * 删除单个批次的 key.
+   *
+   * <p>优先使用 UNLINK，若失败则输出 WARN 并回退到 DEL。
+   * 一旦 UNLINK 失败，后续批次将直接使用 DEL 不再尝试 UNLINK。</p>
+   *
+   * <p>DEL 失败时直接抛出异常，由 {@code scanAndDeleteInBatches} 传播到
+   * {@code clear()} / {@code clearByPrefix()} 的外层 catch 触发
+   * {@code recordFailure()}，避免误调 {@code recordSuccess()} 导致降级状态
+   * 被错误翻转、进而触发恢复回调清空 L1。</p>
+   *
+   * @param keyCommands      Redis key 命令接口
+   * @param batch            待删除的 key 字节数组列表
+   * @param keepTryingUnlink 是否尝试 UNLINK（为 false 时直接用 DEL）
+   * @return 批量删除结果（删除数量 + 是否继续尝试 UNLINK）
+   * @throws RuntimeException 当 DEL 命令执行失败时抛出，由调用方处理
+   */
   private DeleteBatchResult deleteBatch(
       RedisKeyCommands keyCommands,
       List<byte[]> batch,
@@ -311,14 +355,9 @@ public class RedisCacheManager implements CacheManager {
       }
     }
 
-    // 使用 DEL 作为回退方案
-    try {
-      Long deleted = keyCommands.del(keysArray);
-      return new DeleteBatchResult(deleted != null ? deleted : 0L, false);
-    } catch (Exception e) {
-      LOG.error("Failed to delete batch with DEL command", e);
-      return new DeleteBatchResult(0L, false);
-    }
+    // 使用 DEL 作为回退方案：失败时不吞异常，传播到外层 catch 触发 recordFailure
+    Long deleted = keyCommands.del(keysArray);
+    return new DeleteBatchResult(deleted != null ? deleted : 0L, false);
   }
 
   private String redisKey(String key) {
@@ -363,8 +402,13 @@ public class RedisCacheManager implements CacheManager {
   /**
    * 记录操作成功，重置失败计数.
    *
-   * <p>如果之前处于降级状态，输出 INFO 级别恢复日志，
-   * 并触发恢复回调。</p>
+   * <p>如果之前处于降级状态，要求连续 {@link #RECOVERY_THRESHOLD} 次成功才判定恢复，
+   * 输出 INFO 级别恢复日志并触发恢复回调。这可以防止 Redis flapping（在可用和不可用
+   * 之间快速抖动）时反复触发 recoveryCallback 清空 L1，引发缓存雪崩。</p>
+   *
+   * <p><b>Fast-path 优化</b>：非降级状态下（{@code degradationWarned == false}），
+   * 只需 reset 失败计数后立即返回，不获取锁。绝大多数情况下 Redis 正常运行，
+   * 避免无谓的 synchronized 开销。仅在降级状态下才进入 synchronized 块。</p>
    *
    * <p>恢复判断通过 synchronized 保证原子性：多个线程并发成功时，
    * 仅一个线程能将 {@code degradationWarned} 从 true 翻转为 false 并触发回调，
@@ -372,10 +416,20 @@ public class RedisCacheManager implements CacheManager {
    */
   private void recordSuccess() {
     consecutiveFailures.set(0);
+    // Fast-path：非降级状态下无需计数成功次数或获取锁
+    if (!degradationWarned) {
+      return;
+    }
+    // 降级状态下：要求连续 RECOVERY_THRESHOLD 次成功才恢复
+    int successes = consecutiveSuccesses.incrementAndGet();
+    if (successes < RECOVERY_THRESHOLD) {
+      return;
+    }
     boolean recovered = false;
     synchronized (this) {
       if (degradationWarned) {
         degradationWarned = false;
+        consecutiveSuccesses.set(0);
         recovered = true;
       }
     }
@@ -414,6 +468,8 @@ public class RedisCacheManager implements CacheManager {
    * @param e         异常
    */
   private void recordFailure(String operation, String key, Exception e) {
+    // 失败时重置成功计数，确保 flapping 场景下不会因累计的成功次数误触发恢复
+    consecutiveSuccesses.set(0);
     int failures = consecutiveFailures.incrementAndGet();
 
     // 阈值前：输出完整 ERROR 日志带堆栈

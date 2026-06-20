@@ -223,6 +223,9 @@ class RedisCacheManagerTest {
 
   /**
    * 测试 Redis 恢复时触发回调.
+   *
+   * <p>降级状态下需要连续 {@value #RECOVERY_THRESHOLD} 次成功才触发恢复回调，
+   * 防止 Redis flapping 反复清空 L1。</p>
    */
   @Test
   void testRecoveryCallbackTriggered() {
@@ -235,12 +238,14 @@ class RedisCacheManagerTest {
     redisCacheManager.get("key2");
     redisCacheManager.get("key3");
 
-    // 恢复正常
+    // 恢复正常：需要连续 3 次成功才触发恢复回调
     doReturn("recovered").when(valueOperations).get(anyString());
-    redisCacheManager.get("key4");
+    redisCacheManager.get("key4");  // 成功 1
+    redisCacheManager.get("key5");  // 成功 2
+    redisCacheManager.get("key6");  // 成功 3 → 触发恢复
 
-    // 回调应被触发
-    verify(callback).run();
+    // 回调应被触发 1 次
+    verify(callback, times(1)).run();
   }
 
   /**
@@ -264,6 +269,8 @@ class RedisCacheManagerTest {
 
   /**
    * 测试恢复回调执行异常不影响后续操作.
+   *
+   * <p>降级状态下连续 3 次成功触发恢复，回调抛异常不应影响 get() 返回值。</p>
    */
   @Test
   void testRecoveryCallbackExceptionDoesNotAffectOperation() {
@@ -280,11 +287,81 @@ class RedisCacheManagerTest {
     org.mockito.Mockito.doThrow(new RuntimeException("callback error"))
         .when(callback).run();
 
-    // 恢复正常
+    // 恢复正常：连续 3 次成功，第 3 次触发恢复回调
     doReturn("recovered").when(valueOperations).get(anyString());
-    // 不应抛异常
-    Object result = redisCacheManager.get("key4");
+    redisCacheManager.get("key4");  // 成功 1
+    redisCacheManager.get("key5");  // 成功 2
+    // 不应抛异常（回调在锁外执行，异常被 catch）
+    Object result = redisCacheManager.get("key6");  // 成功 3 → 触发恢复
     assertEquals("recovered", result);
+  }
+
+  // ========== Flapping 保护测试 ==========
+
+  /**
+   * 测试 Redis flapping 场景下不会反复触发恢复回调.
+   *
+   * <p>场景：Redis 在可用和不可用之间抖动。
+   * 降级后 2 次成功（未达 RECOVERY_THRESHOLD=3）→ 1 次失败（reset 成功计数）→
+   * 2 次成功（仍不够）→ 1 次失败 → ... 始终不触发 recoveryCallback。
+   * 这避免了 flapping 期间反复清空 L1 导致的缓存雪崩。</p>
+   */
+  @Test
+  void testFlappingDoesNotTriggerRecovery() {
+    Runnable callback = mock(Runnable.class);
+    redisCacheManager.setRecoveryCallback(callback);
+
+    // 3 次失败触发降级
+    when(valueOperations.get(anyString())).thenThrow(new RuntimeException("Redis error"));
+    redisCacheManager.get("f1");
+    redisCacheManager.get("f2");
+    redisCacheManager.get("f3");
+
+    // flapping 循环：2 次成功 + 1 次失败，重复 3 轮
+    for (int round = 0; round < 3; round++) {
+      // 2 次成功（未达 RECOVERY_THRESHOLD=3，不触发恢复）
+      doReturn("ok").when(valueOperations).get(anyString());
+      redisCacheManager.get("s" + round + "_1");
+      redisCacheManager.get("s" + round + "_2");
+
+      // 1 次失败（reset 成功计数）
+      when(valueOperations.get(anyString())).thenThrow(new RuntimeException("Redis error"));
+      redisCacheManager.get("f" + round);
+    }
+
+    // 整个 flapping 过程中不应触发恢复回调
+    verify(callback, never()).run();
+  }
+
+  /**
+   * 测试 flapping 后连续 3 次成功才触发恢复.
+   */
+  @Test
+  void testRecoveryAfterFlapping() {
+    Runnable callback = mock(Runnable.class);
+    redisCacheManager.setRecoveryCallback(callback);
+
+    // 3 次失败触发降级
+    when(valueOperations.get(anyString())).thenThrow(new RuntimeException("Redis error"));
+    redisCacheManager.get("f1");
+    redisCacheManager.get("f2");
+    redisCacheManager.get("f3");
+
+    // 2 次成功后 1 次失败（flapping）
+    doReturn("ok").when(valueOperations).get(anyString());
+    redisCacheManager.get("s1");
+    redisCacheManager.get("s2");
+    when(valueOperations.get(anyString())).thenThrow(new RuntimeException("Redis error"));
+    redisCacheManager.get("f4");
+
+    // 此时成功计数已被 reset，需要重新连续 3 次成功
+    doReturn("ok").when(valueOperations).get(anyString());
+    redisCacheManager.get("s3");  // 成功 1
+    redisCacheManager.get("s4");  // 成功 2
+    verify(callback, never()).run();  // 还没到 3 次
+
+    redisCacheManager.get("s5");  // 成功 3 → 触发恢复
+    verify(callback, times(1)).run();
   }
 
   // ========== 构造器默认值测试 ==========
@@ -341,10 +418,10 @@ class RedisCacheManagerTest {
       when(keyCommands.scan(any(ScanOptions.class))).thenReturn(cursor);
 
       // 使用 doAnswer 来正确处理数组参数匹配
-      doAnswer(inv -> {
-        byte[][] keys = inv.getArgument(0);
-        return (long) keys.length;
-      }).when(keyCommands).del(keysCaptor.capture());
+      // 注意：不要用 inv.getArgument(0) 获取 varargs 参数，Mockito 对 del(byte[]... keys)
+      // 的 getArgument(0) 返回单个 byte[] 而非整个 byte[][]，会导致 ClassCastException。
+      // 批次大小验证由 keysCaptor 在调用后完成。
+      doAnswer(inv -> 2L).when(keyCommands).del(keysCaptor.capture());
 
       return callback.doInRedis(connection);
     }).when(redisTemplate).execute(any(RedisCallback.class));
@@ -401,6 +478,139 @@ class RedisCacheManagerTest {
 
     // 验证使用了正确的 pattern
     assertEquals(1, patternMatches.get());
+  }
+
+  /**
+   * 测试 prefix 含 glob 元字符时，字面前缀二次过滤生效，不误删其他命名空间的 key.
+   *
+   * <p>场景：prefix="user*"（含 *）。Redis SCAN glob 模式 "bing-cache:user**"
+   * 会匹配 "bing-cache:userCache(1)" 和 "bing-cache:userProfile(1)"，
+   * 但只有字面前缀 "bing-cache:user*" 匹配的 key 才应被删除。
+   * 此处模拟两个 key 都被 SCAN 返回，验证只删除字面匹配的。</p>
+   */
+  @Test
+  @SuppressWarnings("unchecked")
+  void testClearByPrefixWithGlobMetaCharFilteredByLiteralPrefix() {
+    RedisCacheManager manager = new RedisCacheManager(
+        redisTemplate, "bing-cache:", 10L, 10L, true, 30L);
+
+    AtomicInteger unlinkCallCount = new AtomicInteger(0);
+    ArgumentCaptor<byte[][]> keysCaptor = ArgumentCaptor.forClass(byte[][].class);
+
+    doAnswer(invocation -> {
+      RedisCallback<Long> callback = invocation.getArgument(0);
+      RedisConnection connection = mock(RedisConnection.class);
+      RedisKeyCommands keyCommands = mock(RedisKeyCommands.class);
+      when(connection.keyCommands()).thenReturn(keyCommands);
+
+      // SCAN 返回两个 key：一个字面匹配 "bing-cache:user*"，一个不匹配
+      Cursor<byte[]> cursor = mock(Cursor.class);
+      when(cursor.hasNext()).thenReturn(true, true, false);
+      when(cursor.next())
+          .thenReturn("bing-cache:user*special".getBytes())  // 字面前缀匹配
+          .thenReturn("bing-cache:userCache(1)".getBytes());  // glob 误匹配，应跳过
+      when(keyCommands.scan(any(ScanOptions.class))).thenReturn(cursor);
+
+      when(keyCommands.unlink(keysCaptor.capture())).thenAnswer(inv -> {
+        unlinkCallCount.incrementAndGet();
+        return 1L;
+      });
+
+      return callback.doInRedis(connection);
+    }).when(redisTemplate).execute(any(RedisCallback.class));
+
+    manager.clearByPrefix("user*");
+
+    // 验证只删除了 1 个 key（字面匹配的），glob 误匹配的被过滤
+    assertEquals(1, unlinkCallCount.get(), "Only literal-prefix-matched key should be deleted");
+    byte[][] deletedKeys = keysCaptor.getAllValues().get(0);
+    assertEquals(1, deletedKeys.length, "Batch should contain only 1 key after literal filter");
+    assertEquals("bing-cache:user*special", new String(deletedKeys[0]),
+        "Deleted key should be the literal-prefix-matched one");
+  }
+
+  /**
+   * 测试正常 prefix（不含 glob 元字符）不受字面前缀过滤影响.
+   *
+   * <p>场景：prefix="user"。SCAN 返回 3 个 "bing-cache:user" 开头的 key，
+   * 都应被删除，验证正常场景下二次过滤不会误删。</p>
+   */
+  @Test
+  @SuppressWarnings("unchecked")
+  void testClearByPrefixNormalPrefixUnaffectedByLiteralFilter() {
+    RedisCacheManager manager = new RedisCacheManager(
+        redisTemplate, "bing-cache:", 10L, 10L, true, 30L);
+
+    AtomicInteger unlinkCallCount = new AtomicInteger(0);
+
+    doAnswer(invocation -> {
+      RedisCallback<Long> callback = invocation.getArgument(0);
+      RedisConnection connection = mock(RedisConnection.class);
+      RedisKeyCommands keyCommands = mock(RedisKeyCommands.class);
+      when(connection.keyCommands()).thenReturn(keyCommands);
+
+      Cursor<byte[]> cursor = mock(Cursor.class);
+      when(cursor.hasNext()).thenReturn(true, true, true, false);
+      when(cursor.next())
+          .thenReturn("bing-cache:user:1".getBytes())
+          .thenReturn("bing-cache:user:2".getBytes())
+          .thenReturn("bing-cache:userProfile(1)".getBytes());
+      when(keyCommands.scan(any(ScanOptions.class))).thenReturn(cursor);
+
+      when(keyCommands.unlink(any(byte[][].class))).thenAnswer(inv -> {
+        unlinkCallCount.incrementAndGet();
+        return 1L;
+      });
+
+      return callback.doInRedis(connection);
+    }).when(redisTemplate).execute(any(RedisCallback.class));
+
+    manager.clearByPrefix("user");
+
+    // 3 个 key 都以 "bing-cache:user" 字面开头，都应被删除
+    assertEquals(1, unlinkCallCount.get(), "Should call UNLINK once for the batch");
+  }
+
+  /**
+   * 测试 clear() 不受字面前缀过滤影响（全清场景）.
+   *
+   * <p>clear() 传 literalPrefix=null，所有 SCAN 返回的 key 都应被删除。</p>
+   */
+  @Test
+  @SuppressWarnings("unchecked")
+  void testClearSkipsLiteralFilter() {
+    RedisCacheManager manager = new RedisCacheManager(
+        redisTemplate, "bing-cache:", 10L, 10L, true, 30L);
+
+    AtomicInteger unlinkCallCount = new AtomicInteger(0);
+
+    doAnswer(invocation -> {
+      RedisCallback<Long> callback = invocation.getArgument(0);
+      RedisConnection connection = mock(RedisConnection.class);
+      RedisKeyCommands keyCommands = mock(RedisKeyCommands.class);
+      when(connection.keyCommands()).thenReturn(keyCommands);
+
+      // SCAN 返回不同前缀的 key（包含 glob 元字符）
+      Cursor<byte[]> cursor = mock(Cursor.class);
+      when(cursor.hasNext()).thenReturn(true, true, true, false);
+      when(cursor.next())
+          .thenReturn("bing-cache:user:1".getBytes())
+          .thenReturn("bing-cache:order*1".getBytes())
+          .thenReturn("bing-cache:product[1]".getBytes());
+      when(keyCommands.scan(any(ScanOptions.class))).thenReturn(cursor);
+
+      when(keyCommands.unlink(any(byte[][].class))).thenAnswer(inv -> {
+        unlinkCallCount.incrementAndGet();
+        return 3L;
+      });
+
+      return callback.doInRedis(connection);
+    }).when(redisTemplate).execute(any(RedisCallback.class));
+
+    manager.clear();
+
+    // 全清场景：所有 key 都应被删除，无二次过滤
+    assertEquals(1, unlinkCallCount.get(), "Should call UNLINK once for the batch");
   }
 
   /**
@@ -482,8 +692,9 @@ class RedisCacheManagerTest {
 
       when(keyCommands.del(any(byte[][].class))).thenAnswer(inv -> {
         delCallCount.incrementAndGet();
-        byte[][] keys = inv.getArgument(0);
-        return (long) keys.length;
+        // 不用 inv.getArgument(0)：Mockito 对 varargs del(byte[]... keys) 的
+        // getArgument(0) 返回单个 byte[] 而非 byte[][]，会抛 ClassCastException
+        return 2L;
       });
 
       return callback.doInRedis(connection);
@@ -679,12 +890,12 @@ class RedisCacheManagerTest {
           .thenReturn("bing-cache:key5".getBytes());
       when(keyCommands.scan(any(ScanOptions.class))).thenReturn(cursor);
 
-      // 第一批次返回 null，其他批次返回正常数量
+      // 第一批次返回 null，其他批次返回固定值
+      // 不用 inv.getArgument(0)：Mockito 对 varargs del(byte[]... keys) 的
+      // getArgument(0) 返回单个 byte[] 而非 byte[][]，会抛 ClassCastException
       doAnswer(invDel -> {
         callCount[0]++;
-        byte[][] keys = invDel.getArgument(0);
-        // 第一批次返回 null，后续返回正常数量
-        return callCount[0] == 1 ? null : (long) keys.length;
+        return callCount[0] == 1 ? null : 2L;
       }).when(keyCommands).del(keysCaptor.capture());
 
       return callback.doInRedis(connection);
@@ -700,6 +911,62 @@ class RedisCacheManagerTest {
     assertEquals(2, keysCaptor.getAllValues().get(1).length, "Second batch should have 2 keys");
     assertEquals(1, keysCaptor.getAllValues().get(2).length, "Third batch should have 1 key");
     verify(redisTemplate).execute(any(RedisCallback.class));
+  }
+
+  /**
+   * 测试 DEL 抛异常时 clear() 不抛异常，且通过 recordFailure 记录失败而非误触 recordSuccess.
+   *
+   * <p>场景：Redis 读可用但写失败（如主从切换瞬间、ACL 只读）。
+   * 若 deleteBatch 吞掉 DEL 异常，clear() 会误调 recordSuccess()，
+   * 可能错误翻转降级状态并触发 recoveryCallback 清空 L1。
+   * 修复后 DEL 异常传播到外层 catch，触发 recordFailure()。</p>
+   */
+  @Test
+  @SuppressWarnings("unchecked")
+  void testClearRecordsFailureWhenDelThrows() {
+    // 使用 useUnlink=false 直接走 DEL 路径
+    RedisCacheManager manager = new RedisCacheManager(
+        redisTemplate, "bing-cache:", 10L, 10L, false, 30L);
+
+    doAnswer(invocation -> {
+      RedisCallback<Long> callback = invocation.getArgument(0);
+      RedisConnection connection = mock(RedisConnection.class);
+      RedisKeyCommands keyCommands = mock(RedisKeyCommands.class);
+      when(connection.keyCommands()).thenReturn(keyCommands);
+
+      Cursor<byte[]> cursor = mock(Cursor.class);
+      when(cursor.hasNext()).thenReturn(true, false);
+      when(cursor.next()).thenReturn("bing-cache:key1".getBytes());
+      when(keyCommands.scan(any(ScanOptions.class))).thenReturn(cursor);
+
+      // DEL 抛异常
+      when(keyCommands.del(any(byte[][].class)))
+          .thenThrow(new RuntimeException("Redis write failed"));
+
+      return callback.doInRedis(connection);
+    }).when(redisTemplate).execute(any(RedisCallback.class));
+
+    // 不应抛异常（外层 catch 兜住）
+    manager.clear();
+
+    // 验证 recordFailure 被调用：阈值前应输出 "Failed to clear from Redis" ERROR 日志
+    List<ILoggingEvent> logs = logAppender.list;
+    boolean hasClearFailureLog = logs.stream()
+        .filter(e -> e.getLevel() == Level.ERROR)
+        .anyMatch(e -> e.getFormattedMessage().contains("Failed to clear from Redis"));
+    assertTrue(hasClearFailureLog,
+        "DEL failure should propagate to recordFailure and log ERROR");
+
+    // 验证没有误触恢复（未设置 recoveryCallback，若误触 recordSuccess 也不会报错，
+    // 但 consecutiveFailures 应为 1 而非 0）
+    // 通过再次失败验证：连续 2 次 clear 失败后，第 3 次应触发降级 WARN
+    manager.clear();
+    manager.clear();
+    boolean hasDegradationWarn = logs.stream()
+        .filter(e -> e.getLevel() == Level.WARN)
+        .anyMatch(e -> e.getFormattedMessage().contains("degraded to L1-only mode"));
+    assertTrue(hasDegradationWarn,
+        "Three consecutive DEL failures should trigger degradation WARN");
   }
 
   // ========== 失败日志限流测试 ==========
@@ -770,6 +1037,9 @@ class RedisCacheManagerTest {
 
   /**
    * 测试恢复后再失败重新开始限流计数.
+   *
+   * <p>降级状态下需要连续 3 次成功才恢复。恢复后失败计数和成功计数都被 reset，
+   * 再次连续失败 3 次会重新触发降级。</p>
    */
   @Test
   void testRecoveryResetsFailureCount() {
@@ -784,9 +1054,11 @@ class RedisCacheManagerTest {
       manager.get("key" + i);
     }
 
-    // 恢复成功
+    // 恢复成功：需要连续 3 次成功才恢复
     doReturn("value").when(valueOperations).get(anyString());
-    manager.get("key3");
+    for (int i = 0; i < 3; i++) {
+      manager.get("recovery-key" + i);
+    }
 
     // 验证恢复 INFO 日志
     List<ILoggingEvent> logsBeforeSecondFailure = new ArrayList<>(logAppender.list);
@@ -795,7 +1067,7 @@ class RedisCacheManagerTest {
         .filter(e -> e.getFormattedMessage().contains("recovered"))
         .count();
     assertEquals(1, recoveryInfoCount, "Should have 1 recovery INFO log");
-    verify(callback).run();
+    verify(callback, times(1)).run();
 
     // 再次失败 3 次，应重新触发 ERROR 日志
     when(valueOperations.get(anyString())).thenThrow(new RuntimeException("Redis down again"));

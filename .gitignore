@@ -44,5 +44,8 @@ build/
 ### Docs ###
 docs/
 
+### CodeBuddy ###
+CODEBUDDY.md
+
 ### Claude local settings ###
 .claude/settings.local.json
