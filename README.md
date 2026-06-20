@@ -302,6 +302,20 @@ public class UserService {
 
 生成的 key 最大长度为 **256 个字符**。超过时自动截断参数部分并追加截断哈希后缀（`...#` + SHA-256 前 16 位十六进制字符），保证截断后的 key 仍然唯一。
 
+### 边界行为说明
+
+| 场景 | 当前行为 |
+|------|----------|
+| `argSpel` 返回 null | 参数部分序列化为字符串 `"null"`，例如 `@BingCache(keyPrefix = "user", argSpel = "#id")` 且 `id == null` 时，key 为 `user(null)` |
+| `argSpel` 非空且同时配置 `argIndexes` | `argSpel` 优先，`argIndexes` 被忽略，并输出一次 WARN 日志 |
+| `argSpel` 求值失败或 key 参数 Jackson 序列化失败 | 直接抛出异常，不执行原方法，也不会写缓存 |
+| 业务方法抛异常 | 异常直接向外抛出，不写缓存 |
+| 业务方法返回 null 且 `cacheNullValue = false` | 不写缓存，后续调用仍会执行原方法 |
+| 业务方法返回 null 且 `cacheNullValue = true` | 写入 L1 null 占位符，后续本实例命中后还原为 null 返回；NullValue 不写入 L2 Redis |
+| L2 命中但 TTL 查询返回 `-2` 或 `0` | 跳过 L1 回填，避免创建已经过期或即将过期的本地脏数据 |
+| 单 key `evict()` / `@BingCacheEvict(allEntries = false)` | 清除当前实例 L1 和 Redis L2，并通过 Redis Pub/Sub 通知其他实例；不递增版本号，Pub/Sub 丢失时只能依赖 `l1-max-ttl` 兜底 |
+| `clear()` / `@BingCacheEvict(allEntries = true)` | 清除当前实例缓存并发布 Pub/Sub；在二级缓存模式下递增版本号，可由版本对账补偿 Pub/Sub 丢失 |
+
 ## 缓存架构
 
 ### 两种缓存模式
@@ -315,6 +329,8 @@ public class UserService {
 ```
 
 适用场景：单实例部署，或对缓存一致性要求不高的场景。
+
+> **重要限制**：纯 L1 模式没有 Redis Pub/Sub，`evict()` / `@BingCacheEvict` 只能清除**当前 JVM 实例**的本地缓存，无法通知其他实例。多实例部署如果依赖缓存清除保持一致，必须启用 Redis 二级缓存模式。
 
 #### L1 + L2 二级缓存（需要 Redis）
 
@@ -337,6 +353,8 @@ L1 未命中但 L2 命中时，L2 的值会回填到 L1。回填时通过 Redis 
 - **remainingTtl == -2 或 0**：L2 中 key 已不存在或即将过期，**跳过回填**，避免在 L1 创建永不过期的脏数据
 
 ### 跨实例缓存失效（Redis Pub/Sub）
+
+> **前提：必须启用 Redis 二级缓存模式。** Pub/Sub 是 Redis 提供的消息通道能力；没有 Redis 依赖、Redis 连接不可用，或 `bing.cache.redis.enabled=false` 时，组件会退化为纯 L1 模式，此时 `evict()` / `@BingCacheEvict` 只影响当前实例，不具备跨实例失效能力。
 
 多实例部署时，任一实例执行 `@BingCacheEvict` 触发的失效操作会通过 Redis Pub/Sub 广播到其他实例：
 
@@ -425,9 +443,9 @@ bing:
 |------|--------|------|
 | `bing.cache.caffeine.max-size` | `1000` | Caffeine Cache 的最大条目数 |
 | `bing.cache.caffeine.l1-max-ttl` | `0` | L1 最大存活秒数，0 表示不限制。设置后所有 L1 条目过期时间不超过该值，作为 Pub/Sub 丢失或 Redis 不可用时的兜底保障。**L1+L2 模式下若保持 0，组件会自动使用 300 秒作为兜底默认值**（因单 key evict 的 Pub/Sub 丢失无法通过对账补偿）；纯 L1 模式下 0 即不限制 |
-| `bing.cache.redis.enabled` | `true` | 是否启用 L2 Redis 缓存。仅在 classpath 存在 Redis 依赖且连接可用时生效 |
+| `bing.cache.redis.enabled` | `true` | 是否启用 L2 Redis 缓存。仅在 classpath 存在 Redis 依赖且连接可用时生效；跨实例 `evict()` / `@BingCacheEvict` 失效通知依赖该模式下的 Redis Pub/Sub |
 | `bing.cache.redis.key-prefix` | `bing-cache:` | Redis 中缓存 key 的前缀，用于命名空间隔离 |
-| `bing.cache.redis.channel-name` | `bing-cache:invalidation` | 缓存失效通知的 Pub/Sub 频道名称 |
+| `bing.cache.redis.channel-name` | `bing-cache:invalidation` | 缓存失效通知的 Redis Pub/Sub 频道名称，仅在启用 L2 Redis 缓存时生效 |
 | `bing.cache.reconciliation.enabled` | `true` | 是否启用版本对账，补偿 Pub/Sub 消息丢失 |
 | `bing.cache.reconciliation.interval` | `30` | 版本对账间隔秒数 |
 
@@ -548,19 +566,21 @@ INFO  Bing Cache: Redis L2 cache has recovered from degradation                 
 
 1. **自调用失效**：同类内部方法调用不会触发 AOP 代理，缓存注解不生效。需通过 Spring 注入的 Bean 调用。
 
-2. **Redis Pub/Sub 不保证送达**：失效消息基于 Redis Pub/Sub 广播，属于 fire-and-forget 模式。极端情况下（如网络抖动），其他实例可能收不到失效通知，导致短时间内读到旧数据。**注意：版本对账机制只补偿 `clear()` 和 `clearByPrefix()` 的 Pub/Sub 丢失，单 key `evict()` 的丢失无法补偿**（详见"版本对账机制 → 对账范围限制"）。建议生产环境设置 `l1-max-ttl` 作为兜底。
+2. **Redis Pub/Sub 依赖 Redis 二级缓存模式**：跨实例缓存失效通知使用 Redis Pub/Sub 实现。没有 Redis 依赖、Redis 连接不可用，或 `bing.cache.redis.enabled=false` 时，组件以纯 L1 模式运行，`evict()` / `@BingCacheEvict` 只能清除当前 JVM 实例的本地缓存，不能通知其他实例。
 
-3. **适用场景**：本组件适用于读多写少、对缓存一致性要求为最终一致的业务场景（如字典数据、用户信息、配置信息等）。不适合频繁更新且要求强一致性的业务。
+3. **Redis Pub/Sub 不保证送达**：失效消息基于 Redis Pub/Sub 广播，属于 fire-and-forget 模式。极端情况下（如网络抖动），其他实例可能收不到失效通知，导致短时间内读到旧数据。**注意：版本对账机制只补偿 `clear()` 和 `clearByPrefix()` 的 Pub/Sub 丢失，单 key `evict()` 的丢失无法补偿**（详见"版本对账机制 → 对账范围限制"）。建议生产环境设置 `l1-max-ttl` 作为兜底。
 
-4. **多实例部署**：L1 本地缓存各实例独立，`@BingCacheEvict` 通过 Pub/Sub 通知其他实例清除本地缓存，存在毫秒级延迟。如需强一致，请直接查询数据库。
+4. **适用场景**：本组件适用于读多写少、对缓存一致性要求为最终一致的业务场景（如字典数据、用户信息、配置信息等）。不适合频繁更新且要求强一致性的业务。
 
-5. **缓存 key 一致性**：手动 `evict()` 时，key 必须和自动生成的完全一致，可从 DEBUG 日志中获取。推荐使用 `@BingCacheEvict` 注解替代手动操作。
+5. **多实例部署**：L1 本地缓存各实例独立，必须启用 Redis 二级缓存模式后，`@BingCacheEvict` 才会通过 Pub/Sub 通知其他实例清除本地缓存；通知存在毫秒级延迟。如需强一致，请直接查询数据库。
 
-6. **Redis 依赖可选**：`spring-boot-starter-data-redis` 的 scope 为 `provided`，由使用者项目按需引入。没有 Redis 依赖时，组件自动以纯 L1 模式运行。
+6. **缓存 key 一致性**：手动 `evict()` 时，key 必须和自动生成的完全一致，可从 DEBUG 日志中获取。推荐使用 `@BingCacheEvict` 注解替代手动操作。
 
-7. **`allEntries` 清除范围**：`@BingCacheEvict(allEntries = true)` 配合 `cacheName` 或 `keyPrefix` 时，只清除该前缀下的缓存条目；都不指定时才全局清空。
+7. **Redis 依赖可选**：`spring-boot-starter-data-redis` 的 scope 为 `provided`，由使用者项目按需引入。没有 Redis 依赖时，组件自动以纯 L1 模式运行。
 
-8. **`@BingCacheEvict` 未指定 cacheName/keyPrefix 时会输出警告**：当 `@BingCacheEvict` 既没有设置 `cacheName` 也没有设置 `keyPrefix` 时，默认前缀为当前方法名（如 `updateUser`），而对应的 `@BingCache` 方法默认前缀是其方法名（如 `getUserById`），两者不匹配会导致 evict 静默失效。组件会输出 WARN 日志提醒：
+8. **`allEntries` 清除范围**：`@BingCacheEvict(allEntries = true)` 配合 `cacheName` 或 `keyPrefix` 时，只清除该前缀下的缓存条目；都不指定时才全局清空。
+
+9. **`@BingCacheEvict` 未指定 cacheName/keyPrefix 时会输出警告**：当 `@BingCacheEvict` 既没有设置 `cacheName` 也没有设置 `keyPrefix` 时，默认前缀为当前方法名（如 `updateUser`），而对应的 `@BingCache` 方法默认前缀是其方法名（如 `getUserById`），两者不匹配会导致 evict 静默失效。组件会输出 WARN 日志提醒：
 
     ```
     WARN @BingCacheEvict on method 'updateUser' has no cacheName or keyPrefix set.
