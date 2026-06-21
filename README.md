@@ -43,6 +43,9 @@ mvn clean verify
 # 安装父 POM 和所有模块到本地 Maven 仓库
 mvn clean install
 
+# 推荐：只安装业务使用所需的 parent + core 到本地 Maven 仓库
+mvn clean install -pl bing-cache-core -am
+
 # 只验证核心模块
 mvn -pl bing-cache-core -am verify
 
