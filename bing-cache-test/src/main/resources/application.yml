@@ -1,0 +1,37 @@
+# Bing Cache 配置
+bing:
+  cache:
+    # Caffeine 本地缓存配置
+    caffeine:
+      max-size: 1000
+      l1-max-ttl: 300  # L1 最大存活 5 分钟
+
+    # Redis 分布式缓存配置
+    redis:
+      enabled: true
+      key-prefix: "demo-cache:"
+      channel-name: "demo-cache:invalidation"
+
+    # 版本协调服务配置
+    reconciliation:
+      enabled: true
+      interval: 30  # 每 30 秒检查一次
+
+# Spring Boot Redis 配置
+spring:
+  data:
+    redis:
+      host: cmac-mini
+      port: 6379
+      password: RedRain123
+      database: 0
+
+# 服务端口
+server:
+  port: 8080
+
+# 日志配置
+logging:
+  level:
+    com.bing.cache: DEBUG
+    com.example.demo: DEBUG

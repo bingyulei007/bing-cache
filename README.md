@@ -15,6 +15,37 @@
 - **确定性 Key**：基于 Jackson 序列化生成 key，不依赖 `toString()`，重启后保持一致
 - **自动装配**：Spring Boot Starter 一键引入，根据 classpath 和配置自动选择缓存模式
 
+## 仓库结构
+
+本仓库使用 Maven 多模块结构：
+
+```text
+bing-cache/
+├── pom.xml              # 父 POM / reactor 聚合工程
+├── bing-cache-core/     # 核心 starter，发布 artifactId 仍为 bing-cache
+└── bing-cache-test/     # 集成测试模块，依赖当前 reactor 中的 bing-cache
+```
+
+对外依赖坐标保持不变：`cn.com.bingbing:bing-cache:1.1-SNAPSHOT`。
+
+## 构建
+
+常用构建命令：
+
+```bash
+# 全量构建
+mvn clean verify
+
+# 安装父 POM 和所有模块到本地 Maven 仓库
+mvn clean install
+
+# 只验证核心模块
+mvn -pl bing-cache-core -am verify
+
+# 构建集成测试模块，并自动构建核心依赖
+mvn -pl bing-cache-test -am verify
+```
+
 ## 快速开始
 
 ### 1. 引入依赖

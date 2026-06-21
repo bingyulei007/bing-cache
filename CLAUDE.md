@@ -4,31 +4,42 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Bing Cache is a Spring AOP-based method-level caching component distributed as a Spring Boot Starter. It provides transparent caching via annotations with a two-tier architecture: L1 local cache (Caffeine) and L2 distributed cache (Redis). Base package: `com.bing.cache`.
+Bing Cache 是一个 Maven 多模块仓库，提供基于 Spring AOP 的方法级缓存 Spring Boot Starter，通过注解透明接入缓存能力，采用两级架构：L1 本地缓存（Caffeine）和 L2 分布式缓存（Redis）。核心包名：`com.bing.cache`。
+
+模块布局：
+
+- `bing-cache-core/` — 核心 starter library，发布 artifact 仍为 `cn.com.bingbing:bing-cache`。
+- `bing-cache-test/` — 集成测试模块，依赖 reactor 构建出的 core artifact。
 
 ## Build & Test Commands
 
 ```bash
-# Full build (compile + tests)
+# 全量构建（编译 + 测试）
 mvn clean verify
 
-# Compile only (skips tests)
+# 安装多模块 artifact 到本地仓库，供下游或独立模块复用
+mvn clean install
+
+# 编译所有模块（跳过测试）
 mvn compile
 
-# Run all unit tests
-mvn test
+# 运行 core 模块全部测试
+mvn test -pl bing-cache-core
 
-# Run a single test class
-mvn test -Dtest=CacheAspectTest
+# 运行 core 模块单个测试类
+mvn test -pl bing-cache-core -Dtest=CacheAspectTest
 
-# Run a single test method
-mvn test -Dtest=CacheAspectTest#shouldReturnCachedValue
+# 运行 core 模块单个测试方法
+mvn test -pl bing-cache-core -Dtest=CacheAspectTest#shouldReturnCachedValue
 
-# Integration tests (requires Docker for Testcontainers)
-mvn test -Dtest=CompositeCacheManagerIntegrationTest
+# 运行 reactor 集成测试模块（自动构建依赖模块）
+mvn verify -pl bing-cache-test -am
+
+# 运行 core 模块内 Testcontainers 集成测试（需要 Docker）
+mvn test -pl bing-cache-core -Dtest=CompositeCacheManagerIntegrationTest
 ```
 
-**JDK requirement**: Must use JDK 21. System default JDK 8 will cause Caffeine 3.x class loading failures.
+**JDK requirement**: Must use JDK 17. Newer JDKs are okay when compiling with release 17. System default JDK 8 will cause Caffeine 3.x class loading failures.
 
 ## Architecture
 
@@ -53,6 +64,8 @@ CacheManager interface          (cache/)
 
 ### Key packages
 
+以下包目录位于 `bing-cache-core/src/main/java/com/bing/cache/` 下：
+
 - `annotation/` — `@BingCache`, `@BingCacheEvict` annotations
 - `aspect/` — `CacheAspect` (read), `CacheEvictAspect` (evict), `BingCacheNullValue` (package-private null sentinel)
 - `cache/` — `CacheManager` interface and all implementations (Caffeine, Redis, Composite), Pub/Sub messaging (`CacheInvalidationMessage`, `CacheInvalidationPublisher`, `RedisCacheInvalidationPublisher`, `CacheInvalidationListener`), version reconciliation (`CacheVersionStore`, `CacheReconciliationService`)
@@ -71,7 +84,7 @@ CacheManager interface          (cache/)
 
 - Redis-backed version counter per cacheName. Key format: `{keyPrefix}version:{cacheName}`.
 - Global version key: `{keyPrefix}version:__all__`.
-- `incrementVersion(cacheName)` / `incrementAllVersion()` — called by CompositeCacheManager on evict/clear/clearByPrefix.
+- `incrementVersion(cacheName)` / `incrementAllVersion()` — called by CompositeCacheManager on clear/clearByPrefix only; single-key evict relies on Pub/Sub + l1-max-ttl backstop and does not increment version.
 - `getVersion(cacheName)` / `getActiveCacheNames()` — called by CacheReconciliationService during periodic checks.
 
 #### CacheReconciliationService
@@ -84,7 +97,7 @@ CacheManager interface          (cache/)
 #### CompositeCacheManager
 
 - **Backfill race fix**: `backfillL1()` checks `remainingTtl`: >0 → use it; -1 → L1 no expiry; -2/0 → skip backfill + warn log.
-- **Version increment**: `evict()` calls `incrementVersion(key)`, `clear()` calls `incrementAllVersion()`, `clearByPrefix(prefix)` calls `incrementVersion(prefix)`. All guarded by `versionStore != null`.
+- **Version increment**: Only `clear()` calls `incrementAllVersion()` and `clearByPrefix(prefix)` calls `incrementVersion(prefix)`. Single-key `evict()` relies on Pub/Sub + l1-max-ttl backstop and does not increment version. All guarded by `versionStore != null`.
 - **Redis recovery callback**: `RedisCacheManager.setRecoveryCallback()` is wired in auto-config to `l1CacheManager::clear`, ensuring L1 dirty data is cleared when Redis recovers from degradation.
 
 ### Auto-configuration conditions
@@ -158,6 +171,7 @@ Prefix: `bing.cache`
 
 ## Test Structure
 
-- Unit tests in `src/test/java/.../` — Mockito for mocking Redis, JUnit 5
-- Integration tests: `CompositeCacheManagerIntegrationTest`, `ReconciliationIntegrationTest` — use Testcontainers (redis:7-alpine), requires Docker
-- 150 test cases total (count via `@Test` annotations)
+- Core 单元测试位于 `bing-cache-core/src/test/java/.../` — Mockito for mocking Redis, JUnit 5
+- Core 集成测试：`CompositeCacheManagerIntegrationTest`, `ReconciliationIntegrationTest` — use Testcontainers (redis:7-alpine), requires Docker
+- Reactor 集成测试模块：`bing-cache-test/`，用于验证依赖 reactor 构建 core artifact 的集成场景
+- 测试数量以 Maven 测试输出为准，避免文档中的固定计数随用例增减而过期
