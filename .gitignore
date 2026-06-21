@@ -49,6 +49,7 @@ CODEBUDDY.md
 
 ### Claude local settings ###
 .claude/settings.local.json
+.claude/worktrees/
 
 ### Local runtime traces ###
 .instance-pids.txt
