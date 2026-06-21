@@ -21,12 +21,16 @@
 
 ```text
 bing-cache/
-├── pom.xml              # 父 POM / reactor 聚合工程
-├── bing-cache-core/     # 核心 starter，发布 artifactId 仍为 bing-cache
+├── pom.xml              # 父 POM / reactor 聚合工程，统一管理版本、依赖和插件
+├── bing-cache-core/     # 核心 starter 源码与单元测试，发布 artifactId 仍为 bing-cache
+│   ├── src/main/java/com/bing/cache/
+│   └── src/test/java/com/bing/cache/
 └── bing-cache-test/     # 集成测试模块，依赖当前 reactor 中的 bing-cache
+    ├── src/main/java/com/example/demo/
+    └── src/test/java/com/example/demo/
 ```
 
-对外依赖坐标保持不变：`cn.com.bingbing:bing-cache:1.1-SNAPSHOT`。
+对外依赖坐标保持不变：`cn.com.bingbing:bing-cache:1.1-SNAPSHOT`。业务项目继续依赖该坐标即可，不需要依赖 `bing-cache-core` 这个目录名。
 
 ## 构建
 

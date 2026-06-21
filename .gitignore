@@ -5,6 +5,7 @@ target/
 .kotlin
 
 ### IntelliJ IDEA ###
+.idea/
 .idea/modules.xml
 .idea/jarRepositories.xml
 .idea/compiler.xml
@@ -47,10 +48,15 @@ docs/
 ### CodeBuddy ###
 CODEBUDDY.md
 
-### Claude local settings ###
-.claude/settings.local.json
-.claude/worktrees/
+### Claude local files ###
+.claude/
+CLAUDE.md
 
 ### Local runtime traces ###
 .instance-pids.txt
 *.log
+
+### Local test project notes ###
+bing-cache-test/CLAUDE.md
+bing-cache-test/MULTI_INSTANCE_TEST.md
+bing-cache-test/doc/
