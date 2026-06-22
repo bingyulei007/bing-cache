@@ -130,7 +130,10 @@ public class CacheVersionStore {
       ScanOptions options = ScanOptions.scanOptions().match(pattern).count(100).build();
       var keyCommands = connection.keyCommands();
       if (keyCommands == null) {
-        throw new IllegalStateException("Redis key commands are not available");
+        // keyCommands 为 null（集群模式、连接切换等瞬时状态），
+        // 降级返回空集，避免在调度线程上抛异常导致对账任务被取消。
+        LOG.warn("Redis key commands are not available, skipping this reconciliation cycle");
+        return Set.of();
       }
       try (var cursor = keyCommands.scan(options)) {
         while (cursor.hasNext()) {
