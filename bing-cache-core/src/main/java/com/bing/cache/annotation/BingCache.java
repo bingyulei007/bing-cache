@@ -46,12 +46,6 @@ public @interface BingCache {
    * 指定相同的 cacheName 即可确保两者操作同一组缓存条目。
    * 优先级高于 {@link #keyPrefix()}。</p>
    *
-   * <p><b>重载方法注意：</b>显式指定 cacheName 时，prefix 就是 cacheName 本身
-   *（不含参数类型）。若同一类中存在同名重载方法且都标注 {@code @BingCache}
-   * 并指定相同 cacheName，不同类型参数序列化后字符串相同时（如 {@code int 1}
-   * 和 {@code String "1"} 均序列化为 {@code "1"}）会生成相同 key，导致缓存污染。
-   * 此时请为不同重载方法指定不同 cacheName，或使用 {@link #argSpel()} 加类型前缀。</p>
-   *
    * @return 缓存名称
    */
   String cacheName() default "";
@@ -60,7 +54,7 @@ public @interface BingCache {
    * 缓存 key 前缀.
    *
    * <p>为空时默认使用 {@code className.methodName(paramTypes)} 作为前缀
-   *（含参数类型签名，见类级 Javadoc）。
+   *（含参数类型签名，详见类级 Javadoc）。
    * 设置后将替换默认前缀，用于自定义缓存空间。
    * 当 {@link #cacheName()} 不为空时，cacheName 优先。</p>
    *
@@ -73,6 +67,10 @@ public @interface BingCache {
    *
    * <p>默认值 0 表示不过期。
    * 设置为正数时，缓存条目在指定秒数后自动淘汰。</p>
+   *
+   * <p>在 L1+L2 模式下，若 {@code bing.cache.caffeine.l1-max-ttl} 配置了 L1 最大存活时间，
+   * 实际 L1 过期时间为 {@code min(expireTime, l1MaxTtl)}，
+   * 作为 Pub/Sub 丢失或 Redis 不可用时的兜底保障；L2 过期时间仍按本值。</p>
    *
    * @return 过期秒数
    */
@@ -109,8 +107,11 @@ public @interface BingCache {
    *
    * <p>注意：不支持 {@code #root.targetClass}、{@code #caches} 等 Spring Cache 特有变量。</p>
    *
-   * <p>示例：{@code argSpel = "#user.id"} 生成形如 {@code cacheName(1)} 的 key。
-   * 求值结果为 null 时序列化为 {@code "null"}，自定义对象使用 Jackson 序列化。</p>
+   * <p>示例：{@code argSpel = "#user.id"} 生成形如 {@code cacheName(N:1)} 的 key
+   *（参数经类型前缀序列化：整数统一 {@code N:}、字符串 {@code S:} 等，
+   * 详细规则见 {@code CacheKeyGenerator.serializeArg}）。</p>
+   *
+   * <p>求值结果为 null 时序列化为 {@code "null"}，自定义对象使用 Jackson 序列化。</p>
    *
    * @return SpEL 表达式，为空时使用 argIndexes
    */
