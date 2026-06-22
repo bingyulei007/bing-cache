@@ -173,6 +173,11 @@ public class CacheReconciliationService implements SmartLifecycle {
    */
   private void refreshAllKnownVersions() {
     Set<String> activeNames = versionStore.getActiveCacheNames();
+    if (activeNames.isEmpty()) {
+      // getActiveCacheNames 降级返回空集时，保留已有对账状态，避免丢失版本追踪
+      LOG.warn("Active cache names is empty, skipping version refresh to preserve state");
+      return;
+    }
     // 清理已废弃的 cacheName，防止内存泄漏
     lastKnownVersions.keySet().retainAll(activeNames);
     for (String cacheName : activeNames) {
