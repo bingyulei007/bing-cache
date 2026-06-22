@@ -174,6 +174,31 @@ class CaffeineCacheManagerTest {
     assertEquals("dictValue", cacheManager.get("dict([config])"));
   }
 
+  /**
+   * 测试按前缀清除时不会误删前缀相似的缓存（前缀碰撞保护）.
+   *
+   * <p>cacheName "user" 是 "userDetail" / "userInfo" 的前缀。
+   * clearByPrefix("user") 只应清除 "user(" 开头的 key，
+   * 不应清除 "userDetail(" / "userInfo(" 开头的 key。</p>
+   *
+   * <p>该测试覆盖曾经存在的 bug：旧实现用裸 {@code startsWith(prefix)}，
+   * {@code "userDetail([1])".startsWith("user")} 为 {@code true}，会误删。</p>
+   */
+  @Test
+  void testClearByPrefixDoesNotCollideWithSimilarPrefix() {
+    cacheManager.put("user([123])", "user123", 0);
+    cacheManager.put("userDetail([456])", "detail456", 0);
+    cacheManager.put("userInfo([789])", "info789", 0);
+
+    cacheManager.clearByPrefix("user");
+
+    assertNull(cacheManager.get("user([123])"), "user cache should be cleared");
+    assertEquals("detail456", cacheManager.get("userDetail([456])"),
+        "userDetail cache should NOT be cleared (prefix collision protection)");
+    assertEquals("info789", cacheManager.get("userInfo([789])"),
+        "userInfo cache should NOT be cleared (prefix collision protection)");
+  }
+
   // ========== per-entry Expiry 相关测试 ==========
 
   /**
