@@ -203,7 +203,6 @@ class RedisCacheManagerTest {
   @Test
   @SuppressWarnings("unchecked")
   void testClearByPrefix() {
-    // 新实现通过 RedisCallback 在连接层执行 SCAN + 删除，不再调用 redisTemplate.delete(List)
     doAnswer(invocation -> {
       RedisCallback<Long> callback = invocation.getArgument(0);
       RedisConnection connection = mock(RedisConnection.class);
@@ -224,6 +223,43 @@ class RedisCacheManagerTest {
     redisCacheManager.clearByPrefix("user");
 
     verify(redisTemplate).execute(any(RedisCallback.class));
+  }
+
+  /**
+   * 测试 clearByPrefix 不会误删前缀相似的缓存.
+   *
+   * <p>cacheName "user" 是 "userDetail" 的前缀，clearByPrefix("user")
+   * 只应删除 "bing-cache:user(" 开头的 key，不应删除 "bing-cache:userDetail(" 开头的。</p>
+   */
+  @Test
+  @SuppressWarnings("unchecked")
+  void testClearByPrefixDoesNotCollideWithSimilarPrefix() {
+    ArgumentCaptor<byte[][]> keysCaptor = ArgumentCaptor.forClass(byte[][].class);
+
+    doAnswer(invocation -> {
+      RedisCallback<Long> callback = invocation.getArgument(0);
+      RedisConnection connection = mock(RedisConnection.class);
+      var keyCommands = mock(org.springframework.data.redis.connection.RedisKeyCommands.class);
+      when(connection.keyCommands()).thenReturn(keyCommands);
+
+      Cursor<byte[]> cursor = mock(Cursor.class);
+      when(cursor.hasNext()).thenReturn(true, true, false);
+      when(cursor.next())
+          .thenReturn("bing-cache:user([1])".getBytes())
+          .thenReturn("bing-cache:userDetail([1])".getBytes());
+      when(keyCommands.scan(any(ScanOptions.class))).thenReturn(cursor);
+
+      when(keyCommands.unlink(keysCaptor.capture())).thenReturn(1L);
+
+      return callback.doInRedis(connection);
+    }).when(redisTemplate).execute(any(RedisCallback.class));
+
+    redisCacheManager.clearByPrefix("user");
+
+    verify(redisTemplate).execute(any(RedisCallback.class));
+    byte[][] deletedKeys = keysCaptor.getAllValues().get(0);
+    assertEquals(1, deletedKeys.length, "Only 'user' cache keys should be deleted, not 'userDetail'");
+    assertEquals("bing-cache:user([1])", new String(deletedKeys[0]));
   }
 
   @Test
@@ -454,7 +490,7 @@ class RedisCacheManagerTest {
   }
 
   /**
-   * 测试 clearByPrefix 使用正确的 pattern "bing-cache:user*".
+   * 测试 clearByPrefix 使用正确的 pattern "bing-cache:user(*".
    */
   @Test
   @SuppressWarnings("unchecked")
@@ -472,14 +508,14 @@ class RedisCacheManagerTest {
 
       Cursor<byte[]> cursor = mock(Cursor.class);
       when(cursor.hasNext()).thenReturn(true, false);
-      when(cursor.next()).thenReturn("bing-cache:user:1".getBytes());
+      when(cursor.next()).thenReturn("bing-cache:user([1])".getBytes());
 
       // 捕获并验证 pattern
       ArgumentCaptor<ScanOptions> scanCaptor = ArgumentCaptor.forClass(ScanOptions.class);
       when(keyCommands.scan(scanCaptor.capture())).thenAnswer(inv -> {
         ScanOptions opts = scanCaptor.getValue();
         String pattern = new String(opts.getPattern());
-        if ("bing-cache:user*".equals(pattern)) {
+        if ("bing-cache:user(*".equals(pattern)) {
           patternMatches.incrementAndGet();
         }
         return cursor;
@@ -499,10 +535,10 @@ class RedisCacheManagerTest {
   /**
    * 测试 prefix 含 glob 元字符时，字面前缀二次过滤生效，不误删其他命名空间的 key.
    *
-   * <p>场景：prefix="user*"（含 *）。Redis SCAN glob 模式 "bing-cache:user**"
-   * 会匹配 "bing-cache:userCache(1)" 和 "bing-cache:userProfile(1)"，
-   * 但只有字面前缀 "bing-cache:user*" 匹配的 key 才应被删除。
-   * 此处模拟两个 key 都被 SCAN 返回，验证只删除字面匹配的。</p>
+   * <p>场景：prefix="user*"（含 *）。缓存 key 格式为 prefix(args)，
+   * Redis SCAN glob 模式 "bing-cache:user*(*" 会匹配 "bing-cache:user*([1])"
+   * 和 "bing-cache:userCache([1])"，但只有字面前缀 "bing-cache:user*(" 匹配的
+   * key 才应被删除。</p>
    */
   @Test
   @SuppressWarnings("unchecked")
@@ -519,12 +555,12 @@ class RedisCacheManagerTest {
       RedisKeyCommands keyCommands = mock(RedisKeyCommands.class);
       when(connection.keyCommands()).thenReturn(keyCommands);
 
-      // SCAN 返回两个 key：一个字面匹配 "bing-cache:user*"，一个不匹配
+      // SCAN 返回两个 key：一个字面匹配 "bing-cache:user*("，一个不匹配
       Cursor<byte[]> cursor = mock(Cursor.class);
       when(cursor.hasNext()).thenReturn(true, true, false);
       when(cursor.next())
-          .thenReturn("bing-cache:user*special".getBytes())  // 字面前缀匹配
-          .thenReturn("bing-cache:userCache(1)".getBytes());  // glob 误匹配，应跳过
+          .thenReturn("bing-cache:user*([1])".getBytes())  // 字面前缀匹配 "bing-cache:user*("
+          .thenReturn("bing-cache:userCache([1])".getBytes());  // glob 误匹配，应跳过
       when(keyCommands.scan(any(ScanOptions.class))).thenReturn(cursor);
 
       when(keyCommands.unlink(keysCaptor.capture())).thenAnswer(inv -> {
@@ -541,14 +577,14 @@ class RedisCacheManagerTest {
     assertEquals(1, unlinkCallCount.get(), "Only literal-prefix-matched key should be deleted");
     byte[][] deletedKeys = keysCaptor.getAllValues().get(0);
     assertEquals(1, deletedKeys.length, "Batch should contain only 1 key after literal filter");
-    assertEquals("bing-cache:user*special", new String(deletedKeys[0]),
+    assertEquals("bing-cache:user*([1])", new String(deletedKeys[0]),
         "Deleted key should be the literal-prefix-matched one");
   }
 
   /**
    * 测试正常 prefix（不含 glob 元字符）不受字面前缀过滤影响.
    *
-   * <p>场景：prefix="user"。SCAN 返回 3 个 "bing-cache:user" 开头的 key，
+   * <p>场景：prefix="user"。SCAN 返回 3 个 "bing-cache:user(" 开头的 key，
    * 都应被删除，验证正常场景下二次过滤不会误删。</p>
    */
   @Test
@@ -568,14 +604,14 @@ class RedisCacheManagerTest {
       Cursor<byte[]> cursor = mock(Cursor.class);
       when(cursor.hasNext()).thenReturn(true, true, true, false);
       when(cursor.next())
-          .thenReturn("bing-cache:user:1".getBytes())
-          .thenReturn("bing-cache:user:2".getBytes())
-          .thenReturn("bing-cache:userProfile(1)".getBytes());
+          .thenReturn("bing-cache:user([1])".getBytes())
+          .thenReturn("bing-cache:user([2])".getBytes())
+          .thenReturn("bing-cache:user([3])".getBytes());
       when(keyCommands.scan(any(ScanOptions.class))).thenReturn(cursor);
 
       when(keyCommands.unlink(any(byte[][].class))).thenAnswer(inv -> {
         unlinkCallCount.incrementAndGet();
-        return 1L;
+        return 3L;
       });
 
       return callback.doInRedis(connection);
@@ -583,7 +619,7 @@ class RedisCacheManagerTest {
 
     manager.clearByPrefix("user");
 
-    // 3 个 key 都以 "bing-cache:user" 字面开头，都应被删除
+    // 3 个 key 都以 "bing-cache:user(" 字面开头，都应被删除
     assertEquals(1, unlinkCallCount.get(), "Should call UNLINK once for the batch");
   }
 

@@ -233,9 +233,9 @@ public class RedisCacheManager implements CacheManager {
   @Override
   public void clearByPrefix(String prefix) {
     try {
-      // 字面前缀：用于 SCAN 后的 Java 端二次过滤，确保与 CaffeineCacheManager 的
-      // startsWith 语义一致，避免 prefix 含 glob 元字符（* ? [ ]）时误匹配。
-      String literalPrefix = keyPrefix + prefix;
+      // 字面前缀：缓存 key 格式为 prefix(args)，追加分隔符 "(" 精确匹配 cacheName，
+      // 避免一个 cacheName 是另一个前缀时的误删（如 "user" 和 "userDetail"）。
+      String literalPrefix = keyPrefix + prefix + "(";
       String pattern = literalPrefix + "*";
       long deleted = scanAndDeleteInBatches(pattern, literalPrefix, useUnlink);
       LOG.debug("Redis cache clear by prefix {}: {} keys deleted", prefix, deleted);
@@ -262,10 +262,10 @@ public class RedisCacheManager implements CacheManager {
    *
    * <p><b>字面前缀二次过滤</b>：当 {@code literalPrefix} 非 null 时，SCAN 返回的每个
    * key 会先用 {@code String.startsWith(literalPrefix)} 在 Java 端二次校验，确保
-   * 只有字面前缀匹配的 key 被删除。这与 {@link CaffeineCacheManager#clearByPrefix}
-   * 的 {@code startsWith} 语义保持一致，避免 prefix 含 glob 元字符（* ? [ ]）时
-   * Redis SCAN 误匹配其他命名空间的 key。{@code literalPrefix} 为 null 时（如
-   * {@link #clear()} 全清场景）跳过二次过滤。</p>
+   * 只有字面前缀匹配的 key 被删除。{@code literalPrefix} 已包含分隔符 {@code (}，
+   * 因此 {@code clearByPrefix("user")} 的字面前缀为 {@code "bing-cache:user("}，
+   * 不会误匹配 {@code "bing-cache:userDetail("} 开头的 key。
+   * {@code literalPrefix} 为 null 时（如 {@link #clear()} 全清场景）跳过二次过滤。</p>
    *
    * @param pattern       Redis SCAN MATCH 模式（粗筛）
    * @param literalPrefix 字面前缀（null 表示不过滤）
