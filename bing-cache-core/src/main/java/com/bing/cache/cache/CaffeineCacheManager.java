@@ -88,7 +88,9 @@ public class CaffeineCacheManager implements CacheManager {
     // CacheAspect 通过 BingCacheNullValue 占位符规避了 null 缓存需求。
     if (value == null) {
       throw new IllegalArgumentException(
-          "Cannot cache null value. Use a NullValueSentinel placeholder instead.");
+          "Cache value must not be null. Use a NullValueSentinel placeholder "
+              + "(e.g. BingCacheNullValue.INSTANCE) when caching a null result, "
+              + "or set @BingCache(cacheNullValue = false) to skip caching when the result is null.");
     }
     long effectiveExpire = expireSeconds;
     // 应用 L1 最大存活时间限制
