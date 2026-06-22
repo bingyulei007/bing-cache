@@ -28,6 +28,7 @@ import org.springframework.data.redis.core.ScanOptions;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -118,6 +119,8 @@ public class RedisCacheManager implements CacheManager {
       long deleteBatchSize,
       boolean useUnlink,
       long failureLogIntervalSeconds) {
+    this.redisTemplate = Objects.requireNonNull(redisTemplate, "redisTemplate cannot be null");
+    this.keyPrefix = Objects.requireNonNull(keyPrefix, "keyPrefix cannot be null");
     if (scanCount < 1 || scanCount > Integer.MAX_VALUE) {
       throw new IllegalArgumentException("scanCount must be between 1 and "
           + Integer.MAX_VALUE);
@@ -129,8 +132,6 @@ public class RedisCacheManager implements CacheManager {
     if (failureLogIntervalSeconds < 1) {
       throw new IllegalArgumentException("failureLogIntervalSeconds must be greater than 0");
     }
-    this.redisTemplate = redisTemplate;
-    this.keyPrefix = keyPrefix;
     this.scanCount = scanCount;
     this.deleteBatchSize = deleteBatchSize;
     this.useUnlink = useUnlink;

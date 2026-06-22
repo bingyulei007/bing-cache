@@ -19,6 +19,8 @@ package com.bing.cache.cache;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Objects;
+
 /**
  * L1 (Caffeine) + L2 (Redis) 组合缓存管理器.
  *
@@ -63,10 +65,10 @@ public class CompositeCacheManager implements CacheManager {
       RedisCacheManager l2CacheManager,
       CacheInvalidationPublisher invalidationPublisher,
       CacheVersionStore versionStore) {
-    this.l1CacheManager = l1CacheManager;
-    this.l2CacheManager = l2CacheManager;
-    this.invalidationPublisher = invalidationPublisher;
-    this.versionStore = versionStore;
+    this.l1CacheManager = Objects.requireNonNull(l1CacheManager, "l1CacheManager cannot be null");
+    this.l2CacheManager = Objects.requireNonNull(l2CacheManager, "l2CacheManager cannot be null");
+    this.invalidationPublisher = Objects.requireNonNull(invalidationPublisher, "invalidationPublisher cannot be null");
+    this.versionStore = versionStore; // nullable, 表示不启用对账
   }
 
   @Override

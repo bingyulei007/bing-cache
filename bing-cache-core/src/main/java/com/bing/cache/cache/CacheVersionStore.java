@@ -25,6 +25,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -59,8 +60,8 @@ public class CacheVersionStore {
    * @param versionKeyPrefix    版本号 key 前缀，如 "bing-cache:__version__:"
    */
   public CacheVersionStore(StringRedisTemplate stringRedisTemplate, String versionKeyPrefix) {
-    this.stringRedisTemplate = stringRedisTemplate;
-    this.versionKeyPrefix = versionKeyPrefix;
+    this.stringRedisTemplate = Objects.requireNonNull(stringRedisTemplate, "stringRedisTemplate cannot be null");
+    this.versionKeyPrefix = Objects.requireNonNull(versionKeyPrefix, "versionKeyPrefix cannot be null");
   }
 
   /**

@@ -19,6 +19,8 @@ package com.bing.cache.cache;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Objects;
+
 /**
  * 缓存失效通知监听器.
  *
@@ -41,8 +43,8 @@ public class CacheInvalidationListener {
    */
   public CacheInvalidationListener(CacheManager l1CacheManager,
       String instanceId) {
-    this.l1CacheManager = l1CacheManager;
-    this.instanceId = instanceId;
+    this.l1CacheManager = Objects.requireNonNull(l1CacheManager, "l1CacheManager cannot be null");
+    this.instanceId = instanceId; // nullable, 用于过滤自己发出的消息
   }
 
   /**

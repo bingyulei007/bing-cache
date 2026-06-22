@@ -22,6 +22,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.context.SmartLifecycle;
 
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -65,8 +66,8 @@ public class CacheReconciliationService implements SmartLifecycle {
   public CacheReconciliationService(CacheVersionStore versionStore,
       CacheManager l1CacheManager,
       long intervalSeconds) {
-    this.versionStore = versionStore;
-    this.l1CacheManager = l1CacheManager;
+    this.versionStore = Objects.requireNonNull(versionStore, "versionStore cannot be null");
+    this.l1CacheManager = Objects.requireNonNull(l1CacheManager, "l1CacheManager cannot be null");
     this.intervalSeconds = intervalSeconds;
   }
 

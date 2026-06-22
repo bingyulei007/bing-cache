@@ -21,6 +21,7 @@ import org.slf4j.LoggerFactory;
 
 import org.springframework.data.redis.core.StringRedisTemplate;
 
+import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -48,9 +49,9 @@ public class RedisCacheInvalidationPublisher implements CacheInvalidationPublish
    */
   public RedisCacheInvalidationPublisher(StringRedisTemplate stringRedisTemplate,
       String channelName, String instanceId) {
-    this.stringRedisTemplate = stringRedisTemplate;
-    this.channelName = channelName;
-    this.instanceId = instanceId;
+    this.stringRedisTemplate = Objects.requireNonNull(stringRedisTemplate, "stringRedisTemplate cannot be null");
+    this.channelName = Objects.requireNonNull(channelName, "channelName cannot be null");
+    this.instanceId = Objects.requireNonNull(instanceId, "instanceId cannot be null");
   }
 
   /**
