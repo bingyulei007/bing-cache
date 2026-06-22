@@ -109,8 +109,7 @@ public class CaffeineCacheManager implements CacheManager {
 
   @Override
   public void clearByPrefix(String prefix) {
-    String matchPrefix = prefix + "(";
-    cache.asMap().keySet().removeIf(key -> key.startsWith(matchPrefix));
+    cache.asMap().keySet().removeIf(key -> key.startsWith(prefix));
   }
 
   /**

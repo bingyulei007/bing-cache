@@ -55,12 +55,8 @@ public interface CacheManager {
   /**
    * 按前缀清除缓存.
    *
-   * <p>清除所有 key 以 {@code prefix + "("} 开头的缓存条目。
-   * 缓存 key 格式为 {@code prefix(args)}，因此追加分隔符 {@code (} 可精确匹配
-   * 指定 cacheName 的缓存，避免一个 cacheName 是另一个前缀时的误删
-   * （如 {@code "user"} 和 {@code "userDetail"}）。</p>
-   *
-   * <p>用于 {@code @BingCacheEvict(allEntries=true)} 配合 cacheName 时，
+   * <p>清除所有 key 以指定前缀开头的缓存条目。
+   * 用于 {@code @BingCacheEvict(allEntries=true)} 配合 cacheName 时，
    * 只清除同一 cacheName 下的缓存，而非全局清空。</p>
    *
    * @param prefix 缓存 key 前缀（即 cacheName 或 keyPrefix 的值）

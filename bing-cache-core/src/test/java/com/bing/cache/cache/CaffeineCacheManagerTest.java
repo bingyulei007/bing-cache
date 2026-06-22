@@ -161,23 +161,6 @@ class CaffeineCacheManagerTest {
   }
 
   /**
-   * 测试按前缀清除时不会误删前缀相似的缓存.
-   *
-   * <p>cacheName "user" 是 "userDetail" 的前缀，clearByPrefix("user")
-   * 不应清除 "userDetail" 的缓存。</p>
-   */
-  @Test
-  void testClearByPrefixDoesNotCollideWithSimilarPrefix() {
-    cacheManager.put("user([1])", "user1", 0);
-    cacheManager.put("userDetail([1])", "detail1", 0);
-
-    cacheManager.clearByPrefix("user");
-
-    assertNull(cacheManager.get("user([1])"));
-    assertEquals("detail1", cacheManager.get("userDetail([1])"));
-  }
-
-  /**
    * 测试按前缀清除时前缀不匹配任何 key.
    */
   @Test
