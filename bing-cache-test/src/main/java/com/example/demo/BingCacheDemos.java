@@ -144,10 +144,11 @@ public class BingCacheDemos {
   /**
    * 按 ID 查询（Long 类型）- 使用默认前缀
    *
-   * 默认前缀: com.example.demo.BingCacheDemos.findItem(java.lang.Long)
+   * 不设置 cacheName 和 keyPrefix，使用默认前缀:
+   * com.example.demo.BingCacheDemos.findItem(java.lang.Long)
    * 与 findItem(String) 参数类型不同，默认前缀不同，缓存隔离
    */
-  @BingCache(cacheName = "item", expireTime = 120)
+  @BingCache(expireTime = 120)
   public String findItem(Long id) {
     return "Item-Long:" + id + " [time:" + System.currentTimeMillis() + "]";
   }
@@ -155,10 +156,11 @@ public class BingCacheDemos {
   /**
    * 按编码查询（String 类型）- 使用默认前缀
    *
-   * 默认前缀: com.example.demo.BingCacheDemos.findItem(java.lang.String)
+   * 不设置 cacheName 和 keyPrefix，使用默认前缀:
+   * com.example.demo.BingCacheDemos.findItem(java.lang.String)
    * 与 findItem(Long) 参数类型不同，默认前缀不同，缓存隔离
    */
-  @BingCache(cacheName = "item", expireTime = 120)
+  @BingCache(expireTime = 120)
   public String findItem(String code) {
     return "Item-String:" + code + " [time:" + System.currentTimeMillis() + "]";
   }

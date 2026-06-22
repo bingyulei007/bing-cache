@@ -55,7 +55,8 @@ class CacheKeyGeneratorTest {
     String key = generator.generate(method, args, null, "", "", new int[]{}, "");
 
     assertEquals(
-        "com.bing.cache.util.CacheKeyGeneratorTest$TestService.findById(java.lang.Long)([1])", key);
+        "com.bing.cache.util.CacheKeyGeneratorTest$TestService.findById(java.lang.Long)([N:1])",
+        key);
   }
 
   /**
@@ -68,7 +69,7 @@ class CacheKeyGeneratorTest {
 
     String key = generator.generate(method, args, null, "", "user:detail", new int[]{}, "");
 
-    assertEquals("user:detail([1])", key);
+    assertEquals("user:detail([N:1])", key);
   }
 
   /**
@@ -81,7 +82,7 @@ class CacheKeyGeneratorTest {
 
     String key = generator.generate(method, args, null, "user", "user:detail", new int[]{}, "");
 
-    assertEquals("user([1])", key);
+    assertEquals("user([N:1])", key);
   }
 
   /**
@@ -94,7 +95,7 @@ class CacheKeyGeneratorTest {
 
     String key = generator.generate(method, args, null, "user", "", new int[]{}, "");
 
-    assertEquals("user([1])", key);
+    assertEquals("user([N:1])", key);
   }
 
   /**
@@ -108,7 +109,8 @@ class CacheKeyGeneratorTest {
     String key = generator.generate(method, args, null, "", "", new int[]{}, "");
 
     assertEquals(
-        "com.bing.cache.util.CacheKeyGeneratorTest$TestService.findById(java.lang.Long)([1])", key);
+        "com.bing.cache.util.CacheKeyGeneratorTest$TestService.findById(java.lang.Long)([N:1])",
+        key);
   }
 
   /**
@@ -123,7 +125,7 @@ class CacheKeyGeneratorTest {
     String key = generator.generate(method, args, null, "", "", new int[]{0, 2}, "");
 
     assertEquals(
-        "com.bing.cache.util.CacheKeyGeneratorTest$TestService.multiArg(java.lang.String,java.lang.Integer,java.lang.Long)([a, 3])",
+        "com.bing.cache.util.CacheKeyGeneratorTest$TestService.multiArg(java.lang.String,java.lang.Integer,java.lang.Long)([S:a, N:3])",
         key);
   }
 
@@ -267,7 +269,7 @@ class CacheKeyGeneratorTest {
 
     String key = generator.generate(method, args, null, "", "", new int[]{}, "");
 
-    assertTrue(key.contains("[[1, 2, 3]]"));
+    assertTrue(key.contains("[A:[N:1, N:2, N:3]]"));
   }
 
   /**
@@ -320,7 +322,7 @@ class CacheKeyGeneratorTest {
 
     String key = generator.generate(method, args, null, "user", "", new int[]{}, "#id");
 
-    assertEquals("user(1)", key);
+    assertEquals("user(N:1)", key);
   }
 
   /**
@@ -334,7 +336,7 @@ class CacheKeyGeneratorTest {
 
     String key = generator.generate(method, args, null, "user", "", new int[]{}, "#user.id");
 
-    assertEquals("user(42)", key);
+    assertEquals("user(N:42)", key);
   }
 
   /**
@@ -349,7 +351,7 @@ class CacheKeyGeneratorTest {
     String key = generator.generate(method, args, null, "cache", "", new int[]{},
         "#a + ':' + #b + ':' + #c");
 
-    assertEquals("cache(a:2:3)", key);
+    assertEquals("cache(S:a:2:3)", key);
   }
 
   /**
@@ -363,8 +365,8 @@ class CacheKeyGeneratorTest {
     String keyP0 = generator.generate(method, args, null, "user", "", new int[]{}, "#p0");
     String keyA0 = generator.generate(method, args, null, "user", "", new int[]{}, "#a0");
 
-    assertEquals("user(99)", keyP0);
-    assertEquals("user(99)", keyA0);
+    assertEquals("user(N:99)", keyP0);
+    assertEquals("user(N:99)", keyA0);
   }
 
   /**
@@ -378,7 +380,7 @@ class CacheKeyGeneratorTest {
     String key = generator.generate(method, args, null, "cache", "", new int[]{},
         "#root.methodName + ':' + #id");
 
-    assertEquals("cache(findById:1)", key);
+    assertEquals("cache(S:findById:1)", key);
   }
 
   /**
@@ -424,10 +426,10 @@ class CacheKeyGeneratorTest {
         new int[]{0, 2}, "");
 
     assertEquals(
-        "com.bing.cache.util.CacheKeyGeneratorTest$TestService.multiArg(java.lang.String,java.lang.Integer,java.lang.Long)([a, 2, 3])",
+        "com.bing.cache.util.CacheKeyGeneratorTest$TestService.multiArg(java.lang.String,java.lang.Integer,java.lang.Long)([S:a, N:2, N:3])",
         keyWithSpel);
     assertEquals(
-        "com.bing.cache.util.CacheKeyGeneratorTest$TestService.multiArg(java.lang.String,java.lang.Integer,java.lang.Long)([a, 3])",
+        "com.bing.cache.util.CacheKeyGeneratorTest$TestService.multiArg(java.lang.String,java.lang.Integer,java.lang.Long)([S:a, N:3])",
         keyWithArgIndexes);
   }
 
@@ -443,7 +445,7 @@ class CacheKeyGeneratorTest {
     String key = generator.generate(method, args, null, "cache", "",
         new int[]{0, 2}, "#c");
 
-    assertEquals("cache(3)", key);
+    assertEquals("cache(N:3)", key);
   }
 
   /**
@@ -525,11 +527,38 @@ class CacheKeyGeneratorTest {
   }
 
   /**
+   * 测试相同 cacheName 下整数数值归一化，但字符串值与数值区分.
+   */
+  @Test
+  void testSameCacheNameNormalizesIntegralNumbersButDistinguishesString()
+      throws NoSuchMethodException {
+    Method intMethod = TestService.class.getMethod("findById", int.class);
+    Method longMethod = TestService.class.getMethod("findById", Long.class);
+    Method stringMethod = TestService.class.getMethod("findById", String.class);
+
+    String keyFromInt = generator.generate(intMethod, new Object[]{1}, null,
+        "user", "", new int[]{}, "");
+    String keyFromLong = generator.generate(longMethod, new Object[]{1L}, null,
+        "user", "", new int[]{}, "");
+    String keyFromString = generator.generate(stringMethod, new Object[]{"1"}, null,
+        "user", "", new int[]{}, "");
+
+    assertEquals("user([N:1])", keyFromInt);
+    assertEquals(keyFromInt, keyFromLong);
+    assertEquals("user([S:1])", keyFromString);
+    assertNotEquals(keyFromInt, keyFromString);
+  }
+
+  /**
    * 测试用的 Service 类.
    */
   static class TestService {
 
     public String findById(Long id) {
+      return "result";
+    }
+
+    public String findById(int id) {
       return "result";
     }
 

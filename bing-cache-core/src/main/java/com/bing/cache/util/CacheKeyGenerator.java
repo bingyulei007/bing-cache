@@ -19,7 +19,9 @@ package com.bing.cache.util;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import java.lang.reflect.Array;
 import java.lang.reflect.Method;
+import java.math.BigInteger;
 import java.util.Arrays;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
@@ -189,8 +191,9 @@ public class CacheKeyGenerator {
   /**
    * 将参数数组序列化为字符串.
    *
-   * <p>对于基本类型和字符串直接使用 {@link String#valueOf(Object)}；
-   * 对于数组使用 {@link Arrays#deepToString(Object[])}；
+   * <p>对于整数数值类型使用统一数值前缀，确保 {@code Integer 1} 与 {@code Long 1L}
+   * 生成相同 key；对于字符串、布尔、字符和小数类型使用独立前缀，避免 {@code "1"}
+   * 与 {@code 1} 等不同语义值碰撞。对于数组递归序列化元素；
    * 对于其他自定义对象使用 Jackson 序列化为 JSON，
    * 确保不依赖 {@code toString()} 实现也能生成确定性 key。</p>
    *
@@ -222,18 +225,24 @@ public class CacheKeyGenerator {
     if (arg == null) {
       return "null";
     }
-    // 基本类型和字符串，直接用 String.valueOf
-    if (arg instanceof Number || arg instanceof Boolean || arg instanceof Character
-        || arg instanceof String) {
-      return String.valueOf(arg);
+    if (arg instanceof Byte || arg instanceof Short || arg instanceof Integer
+        || arg instanceof Long || arg instanceof BigInteger) {
+      return "N:" + arg;
     }
-    // 对象数组类型，使用 Arrays.deepToString
-    if (arg instanceof Object[]) {
-      return Arrays.deepToString((Object[]) arg);
+    if (arg instanceof String) {
+      return "S:" + arg;
     }
-    // 基本类型数组 (int[], byte[] 等)，包装后使用 deepToString
+    if (arg instanceof Boolean) {
+      return "B:" + arg;
+    }
+    if (arg instanceof Character) {
+      return "C:" + arg;
+    }
+    if (arg instanceof Number) {
+      return "D:" + arg;
+    }
     if (arg.getClass().isArray()) {
-      return Arrays.deepToString(new Object[]{arg});
+      return serializeArray(arg);
     }
     // 自定义对象，使用 Jackson 序列化确保确定性
     try {
@@ -247,6 +256,25 @@ public class CacheKeyGenerator {
           "Failed to serialize argument of type " + arg.getClass().getName()
               + " for cache key generation. Jackson error: " + e.getOriginalMessage(), e);
     }
+  }
+
+  /**
+   * 递归序列化数组元素，避免数组内部的字符串值和数值发生 key 碰撞.
+   *
+   * @param array 数组参数，可为对象数组或基本类型数组
+   * @return 序列化后的数组字符串
+   */
+  private static String serializeArray(Object array) {
+    int length = Array.getLength(array);
+    StringBuilder sb = new StringBuilder("A:[");
+    for (int i = 0; i < length; i++) {
+      if (i > 0) {
+        sb.append(", ");
+      }
+      sb.append(serializeArg(Array.get(array, i)));
+    }
+    sb.append("]");
+    return sb.toString();
   }
 
   /**

@@ -123,7 +123,7 @@ POST   /demo/dict/update/{type}?value=xxx       keyPrefix 配对失效
 POST   /demo/dict/refresh-all                   allEntries+keyPrefix 批量清除
 
 # 手动缓存管理
-DELETE /demo/cache?key=user([1])                手动清除指定 key
+DELETE /demo/cache?key=user([N:1])              手动清除指定 key
 DELETE /demo/cache/prefix/{prefix}              按前缀清除
 DELETE /demo/cache/all                          清空所有缓存
 

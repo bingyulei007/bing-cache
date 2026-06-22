@@ -53,12 +53,12 @@ class CacheEvictAspectTest {
       // 先缓存数据
       service.findById(1L);
       assertEquals("user_1", cacheManager.get(
-          "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById(java.lang.Long)([1])"));
+          "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById(java.lang.Long)([N:1])"));
 
       // 执行清除方法后，缓存应被移除
       service.updateUser(1L);
       assertNull(cacheManager.get(
-          "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById(java.lang.Long)([1])"));
+          "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById(java.lang.Long)([N:1])"));
     }
   }
 
@@ -75,7 +75,7 @@ class CacheEvictAspectTest {
       // 先缓存数据
       service.findById(1L);
       String cacheKey =
-          "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById(java.lang.Long)([1])";
+          "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById(java.lang.Long)([N:1])";
       assertEquals("user_1", cacheManager.get(cacheKey));
 
       // beforeInvocation 清除
@@ -97,7 +97,7 @@ class CacheEvictAspectTest {
       // 先缓存数据
       service.findById(1L);
       String cacheKey =
-          "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById(java.lang.Long)([1])";
+          "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById(java.lang.Long)([N:1])";
       assertEquals("user_1", cacheManager.get(cacheKey));
 
       // 方法抛异常，缓存不应被清除
@@ -123,7 +123,7 @@ class CacheEvictAspectTest {
       // 先缓存数据
       service.findById(1L);
       String cacheKey =
-          "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById(java.lang.Long)([1])";
+          "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById(java.lang.Long)([N:1])";
       assertEquals("user_1", cacheManager.get(cacheKey));
 
       // beforeInvocation=true，即使方法抛异常缓存也被清除
@@ -150,9 +150,9 @@ class CacheEvictAspectTest {
       service.findById(1L);
       service.findById(2L);
       String key1 =
-          "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById(java.lang.Long)([1])";
+          "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById(java.lang.Long)([N:1])";
       String key2 =
-          "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById(java.lang.Long)([2])";
+          "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById(java.lang.Long)([N:2])";
       assertEquals("user_1", cacheManager.get(key1));
       assertEquals("user_2", cacheManager.get(key2));
 
@@ -176,7 +176,7 @@ class CacheEvictAspectTest {
       // 缓存数据
       service.findById(1L);
       String cacheKey =
-          "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById(java.lang.Long)([1])";
+          "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById(java.lang.Long)([N:1])";
       assertEquals("user_1", cacheManager.get(cacheKey));
 
       // 使用 argIndexes={0} 的 evict 方法
@@ -197,7 +197,7 @@ class CacheEvictAspectTest {
 
       // 使用 cacheName="user" 的 @BingCache 缓存数据
       service.findByCacheName(1L);
-      String cacheKey = "user([1])";
+      String cacheKey = "user([N:1])";
       assertEquals("user_1", cacheManager.get(cacheKey));
 
       // 使用 cacheName="user" 的 @BingCacheEvict 清除
@@ -219,8 +219,8 @@ class CacheEvictAspectTest {
       // 缓存 user 和 dict 两种数据
       service.findByCacheName(1L);
       service.findDict("config");
-      String userKey = "user([1])";
-      String dictKey = "dict([config])";
+      String userKey = "user([N:1])";
+      String dictKey = "dict([S:config])";
       assertEquals("user_1", cacheManager.get(userKey));
       assertEquals("dict_config", cacheManager.get(dictKey));
 
@@ -245,8 +245,8 @@ class CacheEvictAspectTest {
       // 缓存 user 和 dict 两种数据
       service.findByCacheName(1L);
       service.findDict("config");
-      String userKey = "user([1])";
-      String dictKey = "dict([config])";
+      String userKey = "user([N:1])";
+      String dictKey = "dict([S:config])";
       assertEquals("user_1", cacheManager.get(userKey));
       assertEquals("dict_config", cacheManager.get(dictKey));
 
@@ -269,7 +269,7 @@ class CacheEvictAspectTest {
 
       // 使用 SpEL key 缓存
       service.findBySpelKey(1L);
-      String cacheKey = "spelCache(1)";
+      String cacheKey = "spelCache(N:1)";
       assertEquals("user_1", cacheManager.get(cacheKey));
 
       // 使用相同 SpEL key 清除
@@ -290,7 +290,7 @@ class CacheEvictAspectTest {
 
       SpelTestUser user = new SpelTestUser(99L, "Alice");
       service.findBySpelUser(user);
-      String cacheKey = "spelUser(99)";
+      String cacheKey = "spelUser(N:99)";
       assertEquals("user_99", cacheManager.get(cacheKey));
 
       // 用相同 id 的不同对象 evict
@@ -312,8 +312,8 @@ class CacheEvictAspectTest {
 
       service.findBySpelKey(1L);
       service.findBySpelKey(2L);
-      String key1 = "spelCache(1)";
-      String key2 = "spelCache(2)";
+      String key1 = "spelCache(N:1)";
+      String key2 = "spelCache(N:2)";
       assertEquals("user_1", cacheManager.get(key1));
       assertEquals("user_2", cacheManager.get(key2));
 

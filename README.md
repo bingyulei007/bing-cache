@@ -170,19 +170,19 @@ SpEL 表达式求值结果通过 Jackson 序列化为字符串（非基本类型
 // 查询 — 缓存结果
 @BingCache(cacheName = "user", expireTime = 300)
 public UserVO getUserById(Long id) { ... }
-// key: user([1])
+// key: user([N:1])
 
 // 更新 — 清除对应缓存（cacheName 相同且参数部分一致即可匹配）
 @BingCacheEvict(cacheName = "user", argIndexes = {0})
 public void updateUser(Long id, UserVO vo) { ... }
-// evict key: user([1]) ✓ 匹配
+// evict key: user([N:1]) ✓ 匹配
 
 // ========== keyPrefix 场景：只缓存不清除 ==========
 
 // 默认前缀太长（com.example.DictService.getDictList），缩短一下
 @BingCache(keyPrefix = "dict", expireTime = 3600)
 public List<DictVO> getDictList(String dictType) { ... }
-// key: dict([sys_config])
+// key: dict([S:sys_config])
 
 // 不过期的静态数据，只需缓存，不需要清除
 @BingCache(keyPrefix = "config:sys")
@@ -203,22 +203,22 @@ public UserVO getUserById(Long id) { ... }
 // 从对象中取字段作为 key（只用 id，不用整个对象）
 @BingCache(cacheName = "user", argSpel = "#user.id", expireTime = 300)
 public UserVO getUser(UserVO user) { ... }
-// key: user(1)
+// key: user(N:1)
 
 // 多参数拼接
 @BingCache(cacheName = "order", argSpel = "#userId + ':' + #type")
 public Order getOrder(Long userId, String type) { ... }
-// key: order(1:normal)
+// key: order(S:1:normal)
 
 // 按索引引用参数（#p0 = 第一个参数，#a0 同义）
 @BingCache(cacheName = "user", argSpel = "#p0")
 public UserVO getUserById(Long id) { ... }
-// key: user(1)
+// key: user(N:1)
 
 // 访问对象方法
 @BingCache(cacheName = "user", argSpel = "#user.getName().toLowerCase()")
 public UserVO getUser(UserVO user) { ... }
-// key: user(alice)
+// key: user(S:alice)
 ```
 
 ### @BingCacheEvict — 缓存清除
@@ -262,7 +262,7 @@ public void clearAllCache() { ... }
 // 使用 argSpel 与 @BingCache 配对（表达式需一致）
 @BingCacheEvict(cacheName = "user", argSpel = "#user.id")
 public void deleteUser(UserVO user) { ... }
-// evict key: user(1) ✓ 匹配
+// evict key: user(N:1) ✓ 匹配
 ```
 
 ### 配对使用
@@ -275,19 +275,19 @@ public void deleteUser(UserVO user) { ... }
 @Service
 public class UserService {
 
-  // 查询 — 缓存结果，key: user([1])
+  // 查询 — 缓存结果，key: user([N:1])
   @BingCache(cacheName = "user", expireTime = 300)
   public UserVO getUserById(Long id) {
     return userMapper.selectById(id);
   }
 
-  // 更新 — 清除缓存，argIndexes={0} 只用 id 生成 key → user([1]) ✓ 匹配
+  // 更新 — 清除缓存，argIndexes={0} 只用 id 生成 key → user([N:1]) ✓ 匹配
   @BingCacheEvict(cacheName = "user", argIndexes = {0})
   public void updateUser(Long id, UserVO vo) {
     userMapper.updateById(vo);
   }
 
-  // 删除 — 只有一个参数，不需要 argIndexes，key 自然匹配 → user([1]) ✓
+  // 删除 — 只有一个参数，不需要 argIndexes，key 自然匹配 → user([N:1]) ✓
   @BingCacheEvict(cacheName = "user")
   public void deleteUser(Long id) {
     userMapper.deleteById(id);
@@ -320,17 +320,17 @@ public class UserService {
 
 | 方式 | 说明 | 示例 |
 |------|------|------|
-| `argSpel` | SpEL 表达式，从参数中选取值 | `argSpel = "#user.id"` → `user(1)` |
-| `argIndexes` | 按索引选取整个参数 | `argIndexes = {0, 2}` → `prefix([a, 3])` |
-| 全量参数（默认） | 所有参数序列化 | `prefix([a, 2, 3])` |
+| `argSpel` | SpEL 表达式，从参数中选取值 | `argSpel = "#user.id"` → `user(N:1)` |
+| `argIndexes` | 按索引选取整个参数 | `argIndexes = {0, 2}` → `prefix([S:a, N:3])` |
+| 全量参数（默认） | 所有参数序列化 | `prefix([S:a, N:2, N:3])` |
 
 ### 参数序列化
 
 | 参数类型 | 序列化方式 | 示例 |
 |----------|-----------|------|
 | null | 字符串 `"null"` | `user([null])` |
-| Number / Boolean / Character / String | `String.valueOf()` | `user([42])`、`user([true])` |
-| 数组 | `Arrays.deepToString()` | `user([[1, 2, 3]])` |
+| 整数数值 / Boolean / Character / String | 类型前缀 + 值 | `user([N:42])`、`user([B:true])`、`user([S:42])` |
+| 数组 | 递归序列化元素 | `user([A:[N:1, N:2, N:3]])` |
 | 自定义对象 | Jackson JSON 序列化 | `user([{"id":1,"name":"Alice"}])` |
 
 > 自定义对象使用 Jackson 序列化而非 `toString()`，确保不同实例和 JVM 重启后 key 一致。
@@ -546,7 +546,7 @@ bing:
 private CacheManager cacheManager;
 
 // 清除指定 key 的缓存
-cacheManager.evict("user([1])");
+cacheManager.evict("user([N:1])");
 
 // 清除指定前缀下的所有缓存
 cacheManager.clearByPrefix("user");
@@ -594,18 +594,18 @@ logging:
 日志输出示例：
 
 ```
-DEBUG Cache hit: user([1])                          # 缓存命中
-DEBUG Cache miss: user([1])                          # 缓存未命中
-DEBUG Cache put: user([1])                           # 缓存写入
-DEBUG Cache put (null value): user([999])            # null 值缓存写入
-DEBUG Cache skip (null result): user([999])          # null 结果跳过缓存
-DEBUG Cache evict: user([1])                         # 缓存清除
+DEBUG Cache hit: user([N:1])                        # 缓存命中
+DEBUG Cache miss: user([N:1])                       # 缓存未命中
+DEBUG Cache put: user([N:1])                        # 缓存写入
+DEBUG Cache put (null value): user([N:999])         # null 值缓存写入
+DEBUG Cache skip (null result): user([N:999])       # null 结果跳过缓存
+DEBUG Cache evict: user([N:1])                      # 缓存清除
 DEBUG Cache clear by prefix: user                    # 按前缀清除
 DEBUG Cache clear all entries                        # 全局清空
-DEBUG L1 cache hit: user([1])                        # L1 命中（二级缓存模式）
-DEBUG L2 cache hit, backfilling L1: user([1])        # L2 命中回填 L1（二级缓存模式）
-DEBUG L1+L2 cache miss: user([1])                    # L1 和 L2 均未命中（二级缓存模式）
-DEBUG Redis cache hit: bing-cache:user([1])          # Redis 缓存命中
+DEBUG L1 cache hit: user([N:1])                     # L1 命中（二级缓存模式）
+DEBUG L2 cache hit, backfilling L1: user([N:1])     # L2 命中回填 L1（二级缓存模式）
+DEBUG L1+L2 cache miss: user([N:1])                 # L1 和 L2 均未命中（二级缓存模式）
+DEBUG Redis cache hit: bing-cache:user([N:1])       # Redis 缓存命中
 WARN  Bing Cache: Redis L2 cache has failed 3 consecutive times, degraded to L1-only mode  # Redis 降级
 INFO  Bing Cache: Redis L2 cache has recovered from degradation                        # Redis 恢复
 ```
