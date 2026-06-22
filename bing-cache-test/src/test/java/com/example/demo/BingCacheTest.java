@@ -379,6 +379,38 @@ public class BingCacheTest {
     }
 
     /**
+     * 前缀碰撞保护：clearByPrefix("user") 不应误删 userDetail 的缓存.
+     *
+     * <p>cacheName "user" 是 "userDetail" 的前缀。refreshAllUsers()
+     * 触发 {@code @BingCacheEvict(cacheName="user", allEntries=true)}，
+     * 只应清除 "user(" 开头的 key，不应清除 "userDetail(" 开头的 key。</p>
+     *
+     * <p>该测试覆盖曾经存在的 bug：旧实现用裸 {@code startsWith(prefix)}，
+     * {@code "userDetail([id])".startsWith("user")} 为 {@code true}，会误删。</p>
+     */
+    @Test
+    void testEvict_allEntries_doesNotCollideWithUserDetail() throws InterruptedException {
+        // 准备 user 缓存
+        String u = bingCacheDemos.getUserById(201L);
+        // 准备 userDetail 缓存（cacheName="userDetail"，"user" 的前缀扩展）
+        BingCacheDemos.UserDetailQuery query = new BingCacheDemos.UserDetailQuery(301L, "web");
+        String detail = bingCacheDemos.getUserDetail(query);
+        Thread.sleep(2);
+
+        // refreshAllUsers: @BingCacheEvict(cacheName="user", allEntries=true)
+        bingCacheDemos.refreshAllUsers();
+
+        // user 应被清除 → 重新执行返回不同时间戳
+        String uAfter = bingCacheDemos.getUserById(201L);
+        assertNotEquals(u, uAfter, "user 缓存应被 allEntries 清除");
+
+        // userDetail 不应被误删 → 返回值相同（命中缓存）
+        String detailAfter = bingCacheDemos.getUserDetail(query);
+        assertEquals(detail, detailAfter,
+            "userDetail 缓存不应被 clearByPrefix(\"user\") 误删（前缀碰撞保护）");
+    }
+
+    /**
      * allEntries=true 配合 keyPrefix 批量清除
      */
     @Test
