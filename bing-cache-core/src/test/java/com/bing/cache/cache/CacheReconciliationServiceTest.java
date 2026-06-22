@@ -25,6 +25,9 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.lang.reflect.Field;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -54,7 +57,7 @@ class CacheReconciliationServiceTest {
   @Test
   void testFirstReconciliationRecordsVersions() {
     when(versionStore.getAllVersion()).thenReturn(0L);
-    when(versionStore.getActiveCacheNames()).thenReturn(Set.of("user"));
+    when(versionStore.getActiveCacheNames()).thenReturn(Optional.of(Set.of("user")));
     when(versionStore.getVersion("user")).thenReturn(3L);
 
     service.reconcile();
@@ -71,7 +74,7 @@ class CacheReconciliationServiceTest {
   void testGlobalVersionChangeClearsAllL1() {
     // 首次对账
     when(versionStore.getAllVersion()).thenReturn(1L);
-    when(versionStore.getActiveCacheNames()).thenReturn(Set.of());
+    when(versionStore.getActiveCacheNames()).thenReturn(Optional.of(Set.of()));
     service.reconcile();
 
     // 全局版本号变化
@@ -88,7 +91,7 @@ class CacheReconciliationServiceTest {
   void testCacheNameVersionChangeClearsByPrefix() {
     // 首次对账
     when(versionStore.getAllVersion()).thenReturn(0L);
-    when(versionStore.getActiveCacheNames()).thenReturn(Set.of("user"));
+    when(versionStore.getActiveCacheNames()).thenReturn(Optional.of(Set.of("user")));
     when(versionStore.getVersion("user")).thenReturn(1L);
     service.reconcile();
 
@@ -106,7 +109,7 @@ class CacheReconciliationServiceTest {
   void testNoVersionChangeDoesNotClear() {
     // 首次对账
     when(versionStore.getAllVersion()).thenReturn(0L);
-    when(versionStore.getActiveCacheNames()).thenReturn(Set.of("user"));
+    when(versionStore.getActiveCacheNames()).thenReturn(Optional.of(Set.of("user")));
     when(versionStore.getVersion("user")).thenReturn(1L);
     service.reconcile();
 
@@ -127,7 +130,7 @@ class CacheReconciliationServiceTest {
   void testMultipleCacheNameVersionChanges() {
     // 首次对账
     when(versionStore.getAllVersion()).thenReturn(0L);
-    when(versionStore.getActiveCacheNames()).thenReturn(Set.of("user", "dict"));
+    when(versionStore.getActiveCacheNames()).thenReturn(Optional.of(Set.of("user", "dict")));
     when(versionStore.getVersion("user")).thenReturn(1L);
     when(versionStore.getVersion("dict")).thenReturn(1L);
     service.reconcile();
@@ -139,6 +142,40 @@ class CacheReconciliationServiceTest {
 
     verify(l1CacheManager).clearByPrefix("user");
     verify(l1CacheManager).clearByPrefix("dict");
+  }
+
+  /**
+   * 测试全局版本刷新时扫描不可用：保留已有 cacheName 版本状态.
+   */
+  @Test
+  void testRefreshAllKnownVersionsUnavailablePreservesState() {
+    when(versionStore.getAllVersion()).thenReturn(0L);
+    when(versionStore.getActiveCacheNames()).thenReturn(Optional.of(Set.of("user")));
+    when(versionStore.getVersion("user")).thenReturn(1L);
+    service.reconcile();
+
+    when(versionStore.getAllVersion()).thenReturn(1L);
+    when(versionStore.getActiveCacheNames()).thenReturn(Optional.empty());
+    service.reconcile();
+
+    assertTrue(lastKnownVersions().containsKey("user"));
+  }
+
+  /**
+   * 测试全局版本刷新时真实空集：清理已废弃 cacheName 版本状态.
+   */
+  @Test
+  void testRefreshAllKnownVersionsEmptySetClearsState() {
+    when(versionStore.getAllVersion()).thenReturn(0L);
+    when(versionStore.getActiveCacheNames()).thenReturn(Optional.of(Set.of("user")));
+    when(versionStore.getVersion("user")).thenReturn(1L);
+    service.reconcile();
+
+    when(versionStore.getAllVersion()).thenReturn(1L);
+    when(versionStore.getActiveCacheNames()).thenReturn(Optional.of(Set.of()));
+    service.reconcile();
+
+    assertTrue(lastKnownVersions().isEmpty());
   }
 
   /**
@@ -161,5 +198,16 @@ class CacheReconciliationServiceTest {
     when(versionStore.getAllVersion()).thenThrow(new RuntimeException("Redis error"));
     // 不应抛异常
     service.reconcile();
+  }
+
+  @SuppressWarnings("unchecked")
+  private Map<String, Long> lastKnownVersions() {
+    try {
+      Field field = CacheReconciliationService.class.getDeclaredField("lastKnownVersions");
+      field.setAccessible(true);
+      return (Map<String, Long>) field.get(service);
+    } catch (ReflectiveOperationException e) {
+      throw new AssertionError(e);
+    }
   }
 }

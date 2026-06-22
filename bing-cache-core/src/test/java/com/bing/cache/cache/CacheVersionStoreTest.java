@@ -24,6 +24,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.util.Iterator;
+import java.util.Optional;
 import java.util.Set;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -122,7 +123,9 @@ class CacheVersionStoreTest {
           return callback.doInRedis(connection);
         });
 
-    Set<String> names = versionStore.getActiveCacheNames();
+    Optional<Set<String>> namesOpt = versionStore.getActiveCacheNames();
+    assertTrue(namesOpt.isPresent());
+    Set<String> names = namesOpt.get();
     assertEquals(3, names.size());
     assertTrue(names.contains("user"));
     assertTrue(names.contains("dict"));
@@ -148,7 +151,24 @@ class CacheVersionStoreTest {
           return callback.doInRedis(connection);
         });
 
-    Set<String> names = versionStore.getActiveCacheNames();
-    assertTrue(names.isEmpty());
+    Optional<Set<String>> namesOpt = versionStore.getActiveCacheNames();
+    assertTrue(namesOpt.isPresent());
+    assertTrue(namesOpt.get().isEmpty());
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void testGetActiveCacheNamesUnavailable() {
+    RedisConnection connection = mock(RedisConnection.class);
+    when(connection.keyCommands()).thenReturn(null);
+
+    when(stringRedisTemplate.execute(any(RedisCallback.class)))
+        .thenAnswer(inv -> {
+          RedisCallback<?> callback = inv.getArgument(0);
+          return callback.doInRedis(connection);
+        });
+
+    Optional<Set<String>> namesOpt = versionStore.getActiveCacheNames();
+    assertTrue(namesOpt.isEmpty());
   }
 }

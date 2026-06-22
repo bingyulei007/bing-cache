@@ -26,6 +26,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -121,19 +122,19 @@ public class CacheVersionStore {
    * <p>通过 SCAN 命令扫描版本号 key 前缀，提取 cacheName 部分。
    * 使用 SCAN 替代 KEYS 命令，避免在 key 数量较大时阻塞 Redis。</p>
    *
-   * @return cacheName 集合
+   * @return Optional.empty() 表示扫描能力暂不可用；Optional.of(names) 表示扫描成功，names 可能为空集
    */
-  public Set<String> getActiveCacheNames() {
+  public Optional<Set<String>> getActiveCacheNames() {
     String pattern = versionKeyPrefix + "*";
-    Set<String> result = stringRedisTemplate.execute((RedisCallback<Set<String>>) connection -> {
+    Optional<Set<String>> result = stringRedisTemplate.execute((RedisCallback<Optional<Set<String>>>) connection -> {
       Set<String> names = new HashSet<>();
       ScanOptions options = ScanOptions.scanOptions().match(pattern).count(100).build();
       var keyCommands = connection.keyCommands();
       if (keyCommands == null) {
         // keyCommands 为 null（集群模式、连接切换等瞬时状态），
-        // 降级返回空集，避免在调度线程上抛异常导致对账任务被取消。
+        // 用 Optional.empty() 表示本轮扫描不可用，避免与真实空集混淆。
         LOG.warn("Redis key commands are not available, skipping this reconciliation cycle");
-        return Set.of();
+        return Optional.empty();
       }
       try (var cursor = keyCommands.scan(options)) {
         while (cursor.hasNext()) {
@@ -141,11 +142,8 @@ public class CacheVersionStore {
           names.add(key.substring(versionKeyPrefix.length()));
         }
       }
-      return names;
+      return Optional.of(names);
     });
-    if (result == null || result.isEmpty()) {
-      return Set.of();
-    }
-    return result;
+    return result != null ? result : Optional.empty();
   }
 }

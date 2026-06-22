@@ -23,6 +23,7 @@ import org.springframework.context.SmartLifecycle;
 
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -134,7 +135,12 @@ public class CacheReconciliationService implements SmartLifecycle {
       }
 
       // 检查各 cacheName 的版本号
-      Set<String> activeNames = versionStore.getActiveCacheNames();
+      Optional<Set<String>> activeNamesOpt = versionStore.getActiveCacheNames();
+      if (activeNamesOpt.isEmpty()) {
+        LOG.warn("Active cache names unavailable, skipping this reconciliation cycle");
+        return;
+      }
+      Set<String> activeNames = activeNamesOpt.get();
       for (String cacheName : activeNames) {
         checkCacheNameVersion(cacheName);
       }
@@ -172,12 +178,13 @@ public class CacheReconciliationService implements SmartLifecycle {
    * <p>同时清理已不存在于 Redis 中的过期 cacheName，防止 lastKnownVersions 无限增长。</p>
    */
   private void refreshAllKnownVersions() {
-    Set<String> activeNames = versionStore.getActiveCacheNames();
-    if (activeNames.isEmpty()) {
-      // getActiveCacheNames 降级返回空集时，保留已有对账状态，避免丢失版本追踪
-      LOG.warn("Active cache names is empty, skipping version refresh to preserve state");
+    Optional<Set<String>> activeNamesOpt = versionStore.getActiveCacheNames();
+    if (activeNamesOpt.isEmpty()) {
+      // getActiveCacheNames 降级不可用时，保留已有对账状态，避免丢失版本追踪
+      LOG.warn("Active cache names unavailable, skipping version refresh to preserve state");
       return;
     }
+    Set<String> activeNames = activeNamesOpt.get();
     // 清理已废弃的 cacheName，防止内存泄漏
     lastKnownVersions.keySet().retainAll(activeNames);
     for (String cacheName : activeNames) {
