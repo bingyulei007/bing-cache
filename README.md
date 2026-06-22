@@ -411,8 +411,8 @@ L1 未命中但 L2 命中时，L2 的值会回填到 L1。回填时通过 Redis 
 作为 Pub/Sub 消息丢失的补偿，组件提供版本对账机制：
 
 1. **版本号存储**：Redis 中维护每个 cacheName 的版本号
-   - Key 格式：`bing-cache:version:{cacheName}`
-   - 全局版本：`bing-cache:version:__all__`
+   - Key 格式：`bing-cache:__version__:{cacheName}`
+   - 全局版本：`bing-cache:__version__:__all__`
    - `clear()` 递增全局版本号；`clearByPrefix(prefix)` 递增对应 cacheName 的版本号
    - **单 key `evict(key)` 不递增版本号**（见下方"对账范围限制"）
 
