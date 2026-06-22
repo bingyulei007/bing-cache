@@ -53,47 +53,47 @@ class CacheVersionStoreTest {
     stringRedisTemplate = mock(StringRedisTemplate.class);
     valueOperations = mock(ValueOperations.class);
     when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
-    versionStore = new CacheVersionStore(stringRedisTemplate, "bing-cache:version:");
+    versionStore = new CacheVersionStore(stringRedisTemplate, "bing-cache:__version__:");
   }
 
   @Test
   void testIncrementVersion() {
-    when(valueOperations.increment("bing-cache:version:user")).thenReturn(1L);
+    when(valueOperations.increment("bing-cache:__version__:user")).thenReturn(1L);
     long version = versionStore.incrementVersion("user");
     assertEquals(1L, version);
   }
 
   @Test
   void testIncrementAllVersion() {
-    when(valueOperations.increment("bing-cache:version:__all__")).thenReturn(1L);
+    when(valueOperations.increment("bing-cache:__version__:__all__")).thenReturn(1L);
     long version = versionStore.incrementAllVersion();
     assertEquals(1L, version);
   }
 
   @Test
   void testGetVersionExisting() {
-    when(valueOperations.get("bing-cache:version:user")).thenReturn("5");
+    when(valueOperations.get("bing-cache:__version__:user")).thenReturn("5");
     long version = versionStore.getVersion("user");
     assertEquals(5L, version);
   }
 
   @Test
   void testGetVersionNonExistent() {
-    when(valueOperations.get("bing-cache:version:nonexistent")).thenReturn(null);
+    when(valueOperations.get("bing-cache:__version__:nonexistent")).thenReturn(null);
     long version = versionStore.getVersion("nonexistent");
     assertEquals(0L, version);
   }
 
   @Test
   void testGetVersionInvalidValue() {
-    when(valueOperations.get("bing-cache:version:bad")).thenReturn("not-a-number");
+    when(valueOperations.get("bing-cache:__version__:bad")).thenReturn("not-a-number");
     long version = versionStore.getVersion("bad");
     assertEquals(0L, version);
   }
 
   @Test
   void testGetAllVersion() {
-    when(valueOperations.get("bing-cache:version:__all__")).thenReturn("3");
+    when(valueOperations.get("bing-cache:__version__:__all__")).thenReturn("3");
     long version = versionStore.getAllVersion();
     assertEquals(3L, version);
   }
@@ -103,9 +103,9 @@ class CacheVersionStoreTest {
   void testGetActiveCacheNames() {
     // 模拟 SCAN 返回的 key 字节数据
     Iterator<byte[]> keyIterator = java.util.Arrays.asList(
-        "bing-cache:version:user".getBytes(),
-        "bing-cache:version:dict".getBytes(),
-        "bing-cache:version:__all__".getBytes()
+        "bing-cache:__version__:user".getBytes(),
+        "bing-cache:__version__:dict".getBytes(),
+        "bing-cache:__version__:__all__".getBytes()
     ).iterator();
     Cursor<byte[]> cursor = mock(Cursor.class);
     when(cursor.hasNext()).thenAnswer(inv -> keyIterator.hasNext());

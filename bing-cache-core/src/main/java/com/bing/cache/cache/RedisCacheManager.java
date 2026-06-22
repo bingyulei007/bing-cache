@@ -221,8 +221,10 @@ public class RedisCacheManager implements CacheManager {
   public void clear() {
     try {
       String pattern = keyPrefix + "*";
-      // clear() 全清本命名空间下所有 key，无需字面前缀二次过滤
-      long deleted = scanAndDeleteInBatches(pattern, null, useUnlink);
+      // clear() 全清本命名空间下所有业务缓存 key，但需排除版本号 key
+      //（前缀 bing-cache:__version__:），避免破坏 CacheReconciliationService 的对账状态。
+      String excludePrefix = keyPrefix + "__version__:";
+      long deleted = scanAndDeleteInBatches(pattern, null, excludePrefix, useUnlink);
       LOG.debug("Redis cache clear: {} keys deleted", deleted);
       recordSuccess();
     } catch (Exception e) {
@@ -238,7 +240,7 @@ public class RedisCacheManager implements CacheManager {
       // 同时用于 SCAN 后的 Java 端二次过滤，避免 prefix 含 glob 元字符（* ? [ ]）时误匹配。
       String literalPrefix = keyPrefix + prefix + "(";
       String pattern = literalPrefix + "*";
-      long deleted = scanAndDeleteInBatches(pattern, literalPrefix, useUnlink);
+      long deleted = scanAndDeleteInBatches(pattern, literalPrefix, null, useUnlink);
       LOG.debug("Redis cache clear by prefix {}: {} keys deleted", prefix, deleted);
       recordSuccess();
     } catch (Exception e) {
@@ -268,12 +270,18 @@ public class RedisCacheManager implements CacheManager {
    * 不会误匹配 {@code "bing-cache:userDetail("} 开头的 key。
    * {@code literalPrefix} 为 null 时（如 {@link #clear()} 全清场景）跳过二次过滤。</p>
    *
-   * @param pattern       Redis SCAN MATCH 模式（粗筛）
-   * @param literalPrefix 字面前缀（null 表示不过滤）
-   * @param useUnlink     是否优先尝试 UNLINK
+   * <p><b>排除前缀</b>：当 {@code excludePrefix} 非 null 时，以该前缀开头的 key 会被跳过。
+   * 用于 {@link #clear()} 全清场景排除版本号 key（{@code bing-cache:__version__:}），
+   * 避免破坏 {@link CacheReconciliationService} 的对账状态。</p>
+   *
+   * @param pattern        Redis SCAN MATCH 模式（粗筛）
+   * @param literalPrefix  字面前缀（null 表示不过滤）
+   * @param excludePrefix  排除前缀（null 表示不排除）
+   * @param useUnlink      是否优先尝试 UNLINK
    * @return 实际删除的 key 总数
    */
-  private long scanAndDeleteInBatches(String pattern, String literalPrefix, boolean useUnlink) {
+  private long scanAndDeleteInBatches(String pattern, String literalPrefix,
+      String excludePrefix, boolean useUnlink) {
     return redisTemplate.execute((RedisCallback<Long>) connection -> {
       long totalDeleted = 0;
       List<byte[]> batch = new ArrayList<>();
@@ -288,13 +296,16 @@ public class RedisCacheManager implements CacheManager {
       try (var cursor = keyCommands.scan(options)) {
         while (cursor.hasNext()) {
           byte[] keyBytes = cursor.next();
+          String key = new String(keyBytes, StandardCharsets.UTF_8);
+
+          // 排除前缀过滤：跳过版本号等内部 key（clear() 全清场景使用）
+          if (excludePrefix != null && key.startsWith(excludePrefix)) {
+            continue;
+          }
 
           // 字面前缀二次过滤：跳过 glob 误匹配的 key
-          if (literalPrefix != null) {
-            String key = new String(keyBytes, StandardCharsets.UTF_8);
-            if (!key.startsWith(literalPrefix)) {
-              continue;
-            }
+          if (literalPrefix != null && !key.startsWith(literalPrefix)) {
+            continue;
           }
 
           batch.add(keyBytes);

@@ -34,10 +34,11 @@ import java.util.Set;
  * 当缓存失效操作（evict/clear/clearByPrefix）发生时递增版本号，
  * 对账服务定时检查版本号变化，发现变化时清除对应前缀的 L1 缓存。</p>
  *
- * <p>Key 格式：</p>
+ * <p>Key 格式（使用独立 {@code __version__} 前缀，与业务缓存 key 隔离，
+ * 避免 {@code RedisCacheManager.clear()} 用 {@code keyPrefix + "*"} 扫描时误删）：</p>
  * <ul>
- *   <li>{@code bing-cache:version:{cacheName}} — 指定 cacheName 的版本号</li>
- *   <li>{@code bing-cache:version:__all__} — 全局版本号（allEntries 无 cacheName 时递增）</li>
+ *   <li>{@code bing-cache:__version__:{cacheName}} — 指定 cacheName 的版本号</li>
+ *   <li>{@code bing-cache:__version__:__all__} — 全局版本号（allEntries 无 cacheName 时递增）</li>
  * </ul>
  */
 public class CacheVersionStore {
@@ -55,7 +56,7 @@ public class CacheVersionStore {
    * 构造方法.
    *
    * @param stringRedisTemplate Redis 字符串操作模板
-   * @param versionKeyPrefix    版本号 key 前缀，如 "bing-cache:version:"
+   * @param versionKeyPrefix    版本号 key 前缀，如 "bing-cache:__version__:"
    */
   public CacheVersionStore(StringRedisTemplate stringRedisTemplate, String versionKeyPrefix) {
     this.stringRedisTemplate = stringRedisTemplate;

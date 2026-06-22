@@ -35,8 +35,9 @@ public interface CacheManager {
    * 将值放入缓存.
    *
    * @param key           缓存 key
-   * @param value         缓存值
+   * @param value         缓存值，不允许为 null（null 值请用 NullValueSentinel 占位符）
    * @param expireSeconds 过期时间（秒），0 表示不过期
+   * @throws IllegalArgumentException 如果 value 为 null
    */
   void put(String key, Object value, long expireSeconds);
 

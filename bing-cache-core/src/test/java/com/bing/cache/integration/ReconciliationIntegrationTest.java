@@ -42,7 +42,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 @Testcontainers(disabledWithoutDocker = true)
 class ReconciliationIntegrationTest {
 
-  private static final String VERSION_KEY_PREFIX = "bing-cache:version:";
+  private static final String VERSION_KEY_PREFIX = "bing-cache:__version__:";
 
   private static org.testcontainers.containers.GenericContainer<?> redisContainer;
 

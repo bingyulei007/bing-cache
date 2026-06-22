@@ -19,8 +19,6 @@ package com.bing.cache.cache;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.Objects;
-
 /**
  * 缓存失效通知监听器.
  *
@@ -64,13 +62,19 @@ public class CacheInvalidationListener {
         LOG.warn("Invalid cache invalidation message, type is null: {}", messageJson);
         return;
       }
-      if (Objects.equals(instanceId, message.getInstanceId())) {
+      // 仅当双方 instanceId 都非 null 且相等时才视为自身消息。
+      // 若消息 instanceId 为 null（异常构造），不应误判为自身消息而跳过。
+      if (instanceId != null && instanceId.equals(message.getInstanceId())) {
         LOG.debug("Ignoring self-published cache invalidation: type={}, key={}",
             message.getType(), message.getKey());
         return;
       }
       switch (message.getType()) {
         case EVICT:
+          if (message.getKey() == null) {
+            LOG.warn("Ignoring EVICT message with null key: {}", messageJson);
+            return;
+          }
           l1CacheManager.evict(message.getKey());
           LOG.debug("Received cache invalidation: EVICT key={}", message.getKey());
           break;
@@ -79,6 +83,10 @@ public class CacheInvalidationListener {
           LOG.debug("Received cache invalidation: CLEAR");
           break;
         case CLEAR_PREFIX:
+          if (message.getKey() == null) {
+            LOG.warn("Ignoring CLEAR_PREFIX message with null key: {}", messageJson);
+            return;
+          }
           l1CacheManager.clearByPrefix(message.getKey());
           LOG.debug("Received cache invalidation: CLEAR_PREFIX prefix={}", message.getKey());
           break;

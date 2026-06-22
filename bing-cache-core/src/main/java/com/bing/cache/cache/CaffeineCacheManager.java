@@ -83,6 +83,13 @@ public class CaffeineCacheManager implements CacheManager {
 
   @Override
   public void put(String key, Object value, long expireSeconds) {
+    // 禁止缓存 null 值：get() 返回 null 时需明确表示"未缓存"，
+    // 若允许缓存 null 会与"未缓存"状态混淆。
+    // CacheAspect 通过 BingCacheNullValue 占位符规避了 null 缓存需求。
+    if (value == null) {
+      throw new IllegalArgumentException(
+          "Cannot cache null value. Use a NullValueSentinel placeholder instead.");
+    }
     long effectiveExpire = expireSeconds;
     // 应用 L1 最大存活时间限制
     if (l1MaxTtlSeconds > 0 && effectiveExpire > 0) {

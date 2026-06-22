@@ -118,8 +118,11 @@ public class BingCacheAutoConfiguration {
   public CacheVersionStore cacheVersionStore(
       StringRedisTemplate stringRedisTemplate,
       BingCacheProperties properties) {
+    // 使用独立 keyPrefix（含双下划线哨兵）隔离版本号 key 与业务缓存 key，
+    // 避免 RedisCacheManager.clear() 用 keyPrefix + "*" 扫描时误删版本号。
+    // cacheName 不会包含双下划线哨兵，故业务 key 永远不会匹配此前缀。
     return new CacheVersionStore(stringRedisTemplate,
-        properties.getRedis().getKeyPrefix() + "version:");
+        properties.getRedis().getKeyPrefix() + "__version__:");
   }
 
   /**
@@ -301,12 +304,15 @@ public class BingCacheAutoConfiguration {
     /**
      * 注册缓存失效消息监听器.
      *
-     * <p>监听器需要 L1 缓存管理器实例；通过 CompositeCacheManager 暴露的 L1 访问器获取。</p>
+     * <p>仅在 {@link CompositeCacheManager} 存在时注册（即 L1+L2 二级缓存模式）。
+     * 用户自定义 {@link CacheManager} 时不创建此 bean，避免把用户实现当作 L1 调用
+     * {@code evict/clear/clearByPrefix} 而行为不符。</p>
      *
      * @param cacheManager 缓存管理器（CompositeCacheManager 实例）
      * @return CacheInvalidationListener 实例
      */
     @Bean
+    @ConditionalOnBean(CompositeCacheManager.class)
     @ConditionalOnMissingBean
     public CacheInvalidationListener cacheInvalidationListener(CacheManager cacheManager,
         String bingCacheInstanceId) {
@@ -314,8 +320,10 @@ public class BingCacheAutoConfiguration {
       if (cacheManager instanceof CompositeCacheManager composite) {
         l1 = composite.getL1CacheManager();
       } else {
-        // 非 Composite 模式下不应创建此 bean，但作为防御性处理
-        l1 = cacheManager;
+        // 理论不可达：@ConditionalOnBean(CompositeCacheManager.class) 已保证
+        throw new IllegalStateException(
+            "CacheInvalidationListener requires CompositeCacheManager, but got: "
+                + (cacheManager == null ? "null" : cacheManager.getClass().getName()));
       }
       return new CacheInvalidationListener(l1, bingCacheInstanceId);
     }
@@ -326,10 +334,13 @@ public class BingCacheAutoConfiguration {
      * <p>显式调用 {@link MessageListenerAdapter#afterPropertiesSet()} 初始化内部
      * MethodInvoker，避免容器收到消息时因 invoker 未初始化而抛出 NPE。</p>
      *
+     * <p>仅在 {@link CacheInvalidationListener} 存在时注册（即 L1+L2 二级缓存模式）。</p>
+     *
      * @param listener 缓存失效监听器
      * @return 已初始化的 MessageListenerAdapter
      */
     @Bean("bingCacheInvalidationMessageListenerAdapter")
+    @ConditionalOnBean(CacheInvalidationListener.class)
     @ConditionalOnMissingBean(name = "bingCacheInvalidationMessageListenerAdapter")
     public MessageListenerAdapter cacheInvalidationMessageListenerAdapter(
         CacheInvalidationListener listener) {
@@ -344,12 +355,15 @@ public class BingCacheAutoConfiguration {
      * <p>订阅缓存失效频道，收到消息后调用
      * {@link CacheInvalidationListener#handleMessage(String)} 处理。</p>
      *
+     * <p>仅在 {@link CacheInvalidationListener} 存在时注册（即 L1+L2 二级缓存模式）。</p>
+     *
      * @param connectionFactory Redis 连接工厂
      * @param properties        缓存配置属性
      * @param adapter           缓存失效消息监听适配器
      * @return RedisMessageListenerContainer 实例
      */
     @Bean("bingCacheInvalidationListenerContainer")
+    @ConditionalOnBean(CacheInvalidationListener.class)
     @ConditionalOnMissingBean(name = "bingCacheInvalidationListenerContainer")
     public RedisMessageListenerContainer bingCacheInvalidationListenerContainer(
         RedisConnectionFactory connectionFactory,
@@ -367,7 +381,8 @@ public class BingCacheAutoConfiguration {
     /**
      * 注册版本对账服务.
      *
-     * <p>仅在 Redis 可用且对账启用时注册。
+     * <p>仅在 Redis 可用且对账启用、且 {@link CompositeCacheManager} 存在时注册。
+     * 用户自定义 {@link CacheManager} 时不创建此 bean，避免把用户实现当作 L1 调用。
      * 服务随 Spring 容器生命周期自动启停。</p>
      *
      * @param versionStore  版本号存储（共享 bean）
@@ -376,6 +391,7 @@ public class BingCacheAutoConfiguration {
      * @return CacheReconciliationService 实例
      */
     @Bean
+    @ConditionalOnBean(CompositeCacheManager.class)
     @ConditionalOnProperty(prefix = "bing.cache.reconciliation", name = "enabled",
         havingValue = "true", matchIfMissing = true)
     @ConditionalOnMissingBean
@@ -387,7 +403,10 @@ public class BingCacheAutoConfiguration {
       if (cacheManager instanceof CompositeCacheManager composite) {
         l1 = composite.getL1CacheManager();
       } else {
-        l1 = cacheManager;
+        // 理论不可达：@ConditionalOnBean(CompositeCacheManager.class) 已保证
+        throw new IllegalStateException(
+            "CacheReconciliationService requires CompositeCacheManager, but got: "
+                + (cacheManager == null ? "null" : cacheManager.getClass().getName()));
       }
       CacheReconciliationService service = new CacheReconciliationService(
           versionStore, l1, properties.getReconciliation().getInterval());
