@@ -126,7 +126,11 @@ public class CacheVersionStore {
     Set<String> result = stringRedisTemplate.execute((RedisCallback<Set<String>>) connection -> {
       Set<String> names = new HashSet<>();
       ScanOptions options = ScanOptions.scanOptions().match(pattern).count(100).build();
-      try (var cursor = connection.keyCommands().scan(options)) {
+      var keyCommands = connection.keyCommands();
+      if (keyCommands == null) {
+        throw new IllegalStateException("Redis key commands are not available");
+      }
+      try (var cursor = keyCommands.scan(options)) {
         while (cursor.hasNext()) {
           String key = new String(cursor.next(), StandardCharsets.UTF_8);
           names.add(key.substring(versionKeyPrefix.length()));

@@ -27,6 +27,12 @@ import java.lang.annotation.Target;
  * <p>标注在方法上，自动对方法结果进行本地缓存。
  * 缓存命中时直接返回缓存值，跳过方法执行；
  * 未命中时执行方法并将结果存入缓存。</p>
+ *
+ * <p><b>方法重载注意：</b>当未显式指定 {@link #cacheName()} 时，默认前缀为
+ * "类全限定名.方法名"（不含参数类型）。如果同一类中存在同名重载方法且均标注了
+ * {@code @BingCache}，当不同类型参数序列化后字符串相同时（如 {@code Long 1L}
+ * 和 {@code String "1"} 均序列化为 {@code "1"}），会导致缓存 key 碰撞。
+ * 建议为重载方法显式指定不同的 {@code cacheName} 以避免此问题。</p>
  */
 @Target(ElementType.METHOD)
 @Retention(RetentionPolicy.RUNTIME)

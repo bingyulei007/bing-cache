@@ -548,7 +548,7 @@ class RedisCacheManagerTest {
   /**
    * 测试正常 prefix（不含 glob 元字符）不受字面前缀过滤影响.
    *
-   * <p>场景：prefix="user"。SCAN 返回 3 个 "bing-cache:user" 开头的 key，
+   * <p>场景：prefix="user"。SCAN 返回 3 个 "bing-cache:user(" 开头的 key，
    * 都应被删除，验证正常场景下二次过滤不会误删。</p>
    */
   @Test
@@ -568,14 +568,14 @@ class RedisCacheManagerTest {
       Cursor<byte[]> cursor = mock(Cursor.class);
       when(cursor.hasNext()).thenReturn(true, true, true, false);
       when(cursor.next())
-          .thenReturn("bing-cache:user:1".getBytes())
-          .thenReturn("bing-cache:user:2".getBytes())
-          .thenReturn("bing-cache:userProfile(1)".getBytes());
+          .thenReturn("bing-cache:user([1])".getBytes())
+          .thenReturn("bing-cache:user([2])".getBytes())
+          .thenReturn("bing-cache:user([3])".getBytes());
       when(keyCommands.scan(any(ScanOptions.class))).thenReturn(cursor);
 
       when(keyCommands.unlink(any(byte[][].class))).thenAnswer(inv -> {
         unlinkCallCount.incrementAndGet();
-        return 1L;
+        return 3L;
       });
 
       return callback.doInRedis(connection);
@@ -583,7 +583,7 @@ class RedisCacheManagerTest {
 
     manager.clearByPrefix("user");
 
-    // 3 个 key 都以 "bing-cache:user" 字面开头，都应被删除
+    // 3 个 key 都以 "bing-cache:user(" 字面开头，都应被删除
     assertEquals(1, unlinkCallCount.get(), "Should call UNLINK once for the batch");
   }
 
