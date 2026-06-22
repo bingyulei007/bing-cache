@@ -47,6 +47,7 @@ docs/
 
 ### CodeBuddy ###
 CODEBUDDY.md
+.workbuddy/
 
 ### Claude local files ###
 .claude/
