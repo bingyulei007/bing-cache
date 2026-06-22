@@ -109,7 +109,10 @@ public class CaffeineCacheManager implements CacheManager {
 
   @Override
   public void clearByPrefix(String prefix) {
-    cache.asMap().keySet().removeIf(key -> key.startsWith(prefix));
+    // 缓存 key 格式为 prefix(args)，追加 "(" 精确匹配 cacheName，
+    // 避免一个 cacheName 是另一个前缀时误删（如 clearByPrefix("user") 误删 "userDetail" 的 key）。
+    String matchPrefix = prefix + "(";
+    cache.asMap().keySet().removeIf(key -> key.startsWith(matchPrefix));
   }
 
   /**
