@@ -304,6 +304,43 @@ public class UserService {
 > **注意**：查询方法如果使用了 `argIndexes` 或 `argSpel`，清除方法必须设置对应的值。
 > 例如查询方法 `@BingCache(cacheName = "user", argSpel = "#user.id")`，清除方法也应为 `@BingCacheEvict(cacheName = "user", argSpel = "#user.id")`。
 
+#### 多缓存协同失效
+
+当一个写操作影响多个缓存时，需要多个 `@BingCacheEvict` 协同清除：
+
+```java
+@Service
+public class UserService {
+
+  // 用户详情 — 按 id 缓存
+  @BingCache(cacheName = "userDetail", expireTime = 300)
+  public UserVO getUserDetail(Long id) { ... }
+
+  // 用户列表 — 按 category + page 缓存
+  @BingCache(cacheName = "userList", argIndexes = {0, 1}, expireTime = 120)
+  public List<UserVO> queryUsers(String category, int page) { ... }
+
+  // 用户统计 — 独立缓存
+  @BingCache(cacheName = "userStats", expireTime = 600)
+  public UserStatsVO getUserStats() { ... }
+
+  // 更新用户 — 需要清除所有相关缓存
+  @BingCacheEvict(cacheName = "userDetail", argIndexes = {0})  // 清除该用户的详情
+  @BingCacheEvict(cacheName = "userList", allEntries = true)    // 清除所有列表（无法确定哪些页包含该用户）
+  public void updateUser(Long id, UserVO vo) { ... }
+
+  // 新增用户 — 只需清除列表，详情是新 key 无需清除
+  @BingCacheEvict(cacheName = "userList", allEntries = true)
+  public void createUser(UserVO vo) { ... }
+
+  // 修改用户统计相关字段 — 只清除统计缓存
+  @BingCacheEvict(cacheName = "userStats", allEntries = true)
+  public void refreshUserStats() { ... }
+}
+```
+
+> **设计原则**：不同 cacheName 代表独立的缓存空间。更新数据时，根据业务影响范围显式声明需要清除哪些缓存——既不会遗漏（该清的没清），也不会误伤（不该清的清了）。
+
 ## 缓存 Key 生成规则
 
 格式：`前缀(参数部分)`
