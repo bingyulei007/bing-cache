@@ -28,11 +28,12 @@ import java.lang.annotation.Target;
  * 缓存命中时直接返回缓存值，跳过方法执行；
  * 未命中时执行方法并将结果存入缓存。</p>
  *
- * <p><b>方法重载注意：</b>当未显式指定 {@link #cacheName()} 时，默认前缀为
- * "类全限定名.方法名"（不含参数类型）。如果同一类中存在同名重载方法且均标注了
- * {@code @BingCache}，当不同类型参数序列化后字符串相同时（如 {@code Long 1L}
- * 和 {@code String "1"} 均序列化为 {@code "1"}），会导致缓存 key 碰撞。
- * 建议为重载方法显式指定不同的 {@code cacheName} 以避免此问题。</p>
+ * <p><b>默认前缀与重载方法：</b>当未显式指定 {@link #cacheName()} 或 {@link #keyPrefix()}
+ * 时，默认前缀格式为 {@code className.methodName(paramTypes)}（含参数类型签名）。
+ * 例如 {@code findById(Long)} 的默认前缀为
+ * {@code "com.example.Foo.findById(java.lang.Long)"}。
+ * 参数类型签名可确保同名重载方法（如 {@code findById(Long)} 与 {@code findById(String)}）
+ * 生成不同的缓存 key，避免碰撞。</p>
  */
 @Target(ElementType.METHOD)
 @Retention(RetentionPolicy.RUNTIME)
@@ -52,7 +53,8 @@ public @interface BingCache {
   /**
    * 缓存 key 前缀.
    *
-   * <p>为空时默认使用 "类全限定名.方法名" 作为前缀。
+   * <p>为空时默认使用 {@code className.methodName(paramTypes)} 作为前缀
+   *（含参数类型签名，见类级 Javadoc）。
    * 设置后将替换默认前缀，用于自定义缓存空间。
    * 当 {@link #cacheName()} 不为空时，cacheName 优先。</p>
    *

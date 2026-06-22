@@ -50,8 +50,8 @@ public @interface BingCacheEvict {
   /**
    * 缓存 key 前缀.
    *
-   * <p>为空时默认使用 "类全限定名.方法名" 作为前缀，
-   * 与 {@link BingCache#keyPrefix()} 保持一致。
+   * <p>为空时默认使用 {@code className.methodName(paramTypes)} 作为前缀
+   *（含参数类型签名），与 {@link BingCache#keyPrefix()} 保持一致。
    * 当 {@link #cacheName()} 不为空时，cacheName 优先。</p>
    *
    * @return key 前缀

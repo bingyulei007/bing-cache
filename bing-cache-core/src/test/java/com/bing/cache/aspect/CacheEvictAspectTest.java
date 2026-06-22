@@ -53,12 +53,12 @@ class CacheEvictAspectTest {
       // 先缓存数据
       service.findById(1L);
       assertEquals("user_1", cacheManager.get(
-          "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById([1])"));
+          "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById(java.lang.Long)([1])"));
 
       // 执行清除方法后，缓存应被移除
       service.updateUser(1L);
       assertNull(cacheManager.get(
-          "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById([1])"));
+          "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById(java.lang.Long)([1])"));
     }
   }
 
@@ -75,7 +75,7 @@ class CacheEvictAspectTest {
       // 先缓存数据
       service.findById(1L);
       String cacheKey =
-          "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById([1])";
+          "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById(java.lang.Long)([1])";
       assertEquals("user_1", cacheManager.get(cacheKey));
 
       // beforeInvocation 清除
@@ -97,7 +97,7 @@ class CacheEvictAspectTest {
       // 先缓存数据
       service.findById(1L);
       String cacheKey =
-          "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById([1])";
+          "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById(java.lang.Long)([1])";
       assertEquals("user_1", cacheManager.get(cacheKey));
 
       // 方法抛异常，缓存不应被清除
@@ -123,7 +123,7 @@ class CacheEvictAspectTest {
       // 先缓存数据
       service.findById(1L);
       String cacheKey =
-          "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById([1])";
+          "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById(java.lang.Long)([1])";
       assertEquals("user_1", cacheManager.get(cacheKey));
 
       // beforeInvocation=true，即使方法抛异常缓存也被清除
@@ -150,9 +150,9 @@ class CacheEvictAspectTest {
       service.findById(1L);
       service.findById(2L);
       String key1 =
-          "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById([1])";
+          "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById(java.lang.Long)([1])";
       String key2 =
-          "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById([2])";
+          "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById(java.lang.Long)([2])";
       assertEquals("user_1", cacheManager.get(key1));
       assertEquals("user_2", cacheManager.get(key2));
 
@@ -176,7 +176,7 @@ class CacheEvictAspectTest {
       // 缓存数据
       service.findById(1L);
       String cacheKey =
-          "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById([1])";
+          "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById(java.lang.Long)([1])";
       assertEquals("user_1", cacheManager.get(cacheKey));
 
       // 使用 argIndexes={0} 的 evict 方法
@@ -386,7 +386,7 @@ class CacheEvictAspectTest {
      * @param id 用户 ID
      */
     @BingCacheEvict(keyPrefix =
-        "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById")
+        "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById(java.lang.Long)")
     public void updateUser(Long id) {
       callCount++;
     }
@@ -397,7 +397,7 @@ class CacheEvictAspectTest {
      * @param id 用户 ID
      */
     @BingCacheEvict(keyPrefix =
-        "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById",
+        "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById(java.lang.Long)",
         beforeInvocation = true)
     public void deleteUserBefore(Long id) {
       callCount++;
@@ -409,7 +409,7 @@ class CacheEvictAspectTest {
      * @param id 用户 ID
      */
     @BingCacheEvict(keyPrefix =
-        "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById")
+        "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById(java.lang.Long)")
     public void updateUserWithError(Long id) {
       callCount++;
       throw new RuntimeException("simulated error");
@@ -421,7 +421,7 @@ class CacheEvictAspectTest {
      * @param id 用户 ID
      */
     @BingCacheEvict(keyPrefix =
-        "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById",
+        "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById(java.lang.Long)",
         beforeInvocation = true)
     public void deleteUserBeforeWithError(Long id) {
       callCount++;
@@ -443,7 +443,7 @@ class CacheEvictAspectTest {
      * @param name 用户名
      */
     @BingCacheEvict(keyPrefix =
-        "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById",
+        "com.bing.cache.aspect.CacheEvictAspectTest$TestService.findById(java.lang.Long)",
         argIndexes = {0})
     public void updateUserWithArgIndexes(Long id, String name) {
       callCount++;

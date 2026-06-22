@@ -42,7 +42,10 @@ class CacheKeyGeneratorTest {
   }
 
   /**
-   * 测试使用默认前缀（类名.方法名）生成 key.
+   * 测试使用默认前缀（类名.方法名 + 参数类型签名）生成 key.
+   *
+   * <p>默认前缀格式为 {@code className.methodName(paramTypes)}，包含参数类型签名
+   * 以避免同名重载方法 key 碰撞。</p>
    */
   @Test
   void testGenerateWithDefaultPrefix() throws NoSuchMethodException {
@@ -52,7 +55,7 @@ class CacheKeyGeneratorTest {
     String key = generator.generate(method, args, null, "", "", new int[]{}, "");
 
     assertEquals(
-        "com.bing.cache.util.CacheKeyGeneratorTest$TestService.findById([1])", key);
+        "com.bing.cache.util.CacheKeyGeneratorTest$TestService.findById(java.lang.Long)([1])", key);
   }
 
   /**
@@ -105,7 +108,7 @@ class CacheKeyGeneratorTest {
     String key = generator.generate(method, args, null, "", "", new int[]{}, "");
 
     assertEquals(
-        "com.bing.cache.util.CacheKeyGeneratorTest$TestService.findById([1])", key);
+        "com.bing.cache.util.CacheKeyGeneratorTest$TestService.findById(java.lang.Long)([1])", key);
   }
 
   /**
@@ -120,7 +123,7 @@ class CacheKeyGeneratorTest {
     String key = generator.generate(method, args, null, "", "", new int[]{0, 2}, "");
 
     assertEquals(
-        "com.bing.cache.util.CacheKeyGeneratorTest$TestService.multiArg([a, 3])",
+        "com.bing.cache.util.CacheKeyGeneratorTest$TestService.multiArg(java.lang.String,java.lang.Integer,java.lang.Long)([a, 3])",
         key);
   }
 
@@ -135,7 +138,7 @@ class CacheKeyGeneratorTest {
     String key = generator.generate(method, args, null, "", "", new int[]{}, "");
 
     assertEquals(
-        "com.bing.cache.util.CacheKeyGeneratorTest$TestService.noArg([])", key);
+        "com.bing.cache.util.CacheKeyGeneratorTest$TestService.noArg()([])", key);
   }
 
   /**
@@ -421,10 +424,10 @@ class CacheKeyGeneratorTest {
         new int[]{0, 2}, "");
 
     assertEquals(
-        "com.bing.cache.util.CacheKeyGeneratorTest$TestService.multiArg([a, 2, 3])",
+        "com.bing.cache.util.CacheKeyGeneratorTest$TestService.multiArg(java.lang.String,java.lang.Integer,java.lang.Long)([a, 2, 3])",
         keyWithSpel);
     assertEquals(
-        "com.bing.cache.util.CacheKeyGeneratorTest$TestService.multiArg([a, 3])",
+        "com.bing.cache.util.CacheKeyGeneratorTest$TestService.multiArg(java.lang.String,java.lang.Integer,java.lang.Long)([a, 3])",
         keyWithArgIndexes);
   }
 
@@ -493,11 +496,44 @@ class CacheKeyGeneratorTest {
   }
 
   /**
+   * 测试同名重载方法（参数类型不同）使用默认前缀时生成不同 key.
+   *
+   * <p>cacheName/keyPrefix 都未指定时，默认前缀包含参数类型签名，
+   * 因此 findById(Long 1L) 和 findById(String "1") 即使参数序列化后
+   * 字符串都是 "1"，也能通过类型签名区分，不会碰撞。</p>
+   *
+   * <p>该测试覆盖曾经存在的 bug：旧实现默认前缀只含 className.methodName，
+   * 不含参数类型，导致重载方法 key 碰撞。</p>
+   */
+  @Test
+  void testOverloadMethodsGenerateDifferentKeys() throws NoSuchMethodException {
+    Method longMethod = TestService.class.getMethod("findById", Long.class);
+    Method stringMethod = TestService.class.getMethod("findById", String.class);
+
+    // 1L 和 "1" 序列化后都是 "1"，但参数类型不同
+    String keyFromLong = generator.generate(longMethod, new Object[]{1L}, null,
+        "", "", new int[]{}, "");
+    String keyFromString = generator.generate(stringMethod, new Object[]{"1"}, null,
+        "", "", new int[]{}, "");
+
+    assertNotEquals(keyFromLong, keyFromString,
+        "重载方法 + 不同类型参数序列化后字符串相同时，应通过参数类型签名区分");
+    assertTrue(keyFromLong.contains("java.lang.Long"),
+        "默认前缀应包含参数类型签名：java.lang.Long");
+    assertTrue(keyFromString.contains("java.lang.String"),
+        "默认前缀应包含参数类型签名：java.lang.String");
+  }
+
+  /**
    * 测试用的 Service 类.
    */
   static class TestService {
 
     public String findById(Long id) {
+      return "result";
+    }
+
+    public String findById(String id) {
       return "result";
     }
 

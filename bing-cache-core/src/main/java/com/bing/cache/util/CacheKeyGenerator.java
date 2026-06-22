@@ -22,6 +22,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 import org.springframework.context.expression.MethodBasedEvaluationContext;
 import org.springframework.core.ParameterNameDiscoverer;
@@ -75,7 +76,8 @@ public class CacheKeyGenerator {
    * 生成缓存 key.
    *
    * <p>格式：前缀(参数部分)
-   * 前缀优先级：cacheName > keyPrefix > 类全限定名.方法名。</p>
+   * 前缀优先级：cacheName > keyPrefix > 类全限定名.方法名(参数类型签名)。
+   * 默认前缀包含参数类型签名以避免同名重载方法 key 碰撞。</p>
    *
    * <p>参数部分生成方式：</p>
    * <ul>
@@ -102,7 +104,13 @@ public class CacheKeyGenerator {
     } else if (keyPrefix != null && !keyPrefix.isEmpty()) {
       prefix = keyPrefix;
     } else {
-      prefix = className + "." + methodName;
+      // 默认前缀包含参数类型签名，避免同类同名重载方法 key 碰撞
+      // （如 findById(Long) vs findById(String)，参数序列化后字符串相同时
+      // 仍能通过类型签名区分）。
+      String paramTypes = Arrays.stream(method.getParameterTypes())
+          .map(Class::getName)
+          .collect(Collectors.joining(","));
+      prefix = className + "." + methodName + "(" + paramTypes + ")";
     }
 
     String argsStr;
