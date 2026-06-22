@@ -139,7 +139,31 @@ public class BingCacheDemos {
         System.out.println("[Evict] 刷新所有字典缓存");
     }
 
-    // ==================== 场景6: beforeInvocation ====================
+    // ==================== 场景6: 重载方法默认前缀隔离 ====================
+
+  /**
+   * 按 ID 查询（Long 类型）- 使用默认前缀
+   *
+   * 默认前缀: com.example.demo.BingCacheDemos.findItem(java.lang.Long)
+   * 与 findItem(String) 参数类型不同，默认前缀不同，缓存隔离
+   */
+  @BingCache(cacheName = "item", expireTime = 120)
+  public String findItem(Long id) {
+    return "Item-Long:" + id + " [time:" + System.currentTimeMillis() + "]";
+  }
+
+  /**
+   * 按编码查询（String 类型）- 使用默认前缀
+   *
+   * 默认前缀: com.example.demo.BingCacheDemos.findItem(java.lang.String)
+   * 与 findItem(Long) 参数类型不同，默认前缀不同，缓存隔离
+   */
+  @BingCache(cacheName = "item", expireTime = 120)
+  public String findItem(String code) {
+    return "Item-String:" + code + " [time:" + System.currentTimeMillis() + "]";
+  }
+
+  // ==================== 场景7: beforeInvocation ====================
 
     /**
      * 强制刷新配置 - 方法执行前就清除缓存

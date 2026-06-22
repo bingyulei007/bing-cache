@@ -43,6 +43,10 @@ public @interface BingCacheEvict {
    * 也必须与对应的 {@link BingCache} 保持一致，否则生成的 key 不匹配。
    * 优先级高于 {@link #keyPrefix()}。</p>
    *
+   * <p><b>重载方法注意：</b>若 {@link BingCache} 一侧存在同名重载方法，
+   * 应保证 evict 的参数选取（argIndexes/argSpel）与对应的 {@link BingCache} 完全一致；
+   * 否则在 cacheName 相同时生成的 key 可能错配，导致误删或漏删。</p>
+   *
    * @return 缓存名称
    */
   String cacheName() default "";

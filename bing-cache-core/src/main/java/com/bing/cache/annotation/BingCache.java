@@ -46,6 +46,12 @@ public @interface BingCache {
    * 指定相同的 cacheName 即可确保两者操作同一组缓存条目。
    * 优先级高于 {@link #keyPrefix()}。</p>
    *
+   * <p><b>重载方法注意：</b>显式指定 cacheName 时，prefix 就是 cacheName 本身
+   *（不含参数类型）。若同一类中存在同名重载方法且都标注 {@code @BingCache}
+   * 并指定相同 cacheName，不同类型参数序列化后字符串相同时（如 {@code int 1}
+   * 和 {@code String "1"} 均序列化为 {@code "1"}）会生成相同 key，导致缓存污染。
+   * 此时请为不同重载方法指定不同 cacheName，或使用 {@link #argSpel()} 加类型前缀。</p>
+   *
    * @return 缓存名称
    */
   String cacheName() default "";
