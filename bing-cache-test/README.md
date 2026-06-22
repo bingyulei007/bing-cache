@@ -49,7 +49,7 @@ mvn -pl bing-cache-test -am spring-boot:run
 
 ## 测试覆盖
 
-### BingCacheTest（自动化回归，`src/test/`）
+### BingCacheTest（自动化回归，`src/test/`，22 个用例）
 
 | 测试方法 | 验证要点 |
 |----------|----------|
@@ -71,9 +71,39 @@ mvn -pl bing-cache-test -am spring-boot:run
 | `testEvict_argIndexMismatch_doesNotEvict` | argIndexes 不匹配时缓存保留 |
 | `testEvict_byArgSpel` | SpEL 表达式 key 的配对失效 |
 | `testEvict_allEntries_byCacheName` | `allEntries=true` 清除指定 cacheName 所有条目 |
+| `testEvict_allEntries_doesNotCollideWithUserDetail` | 前缀碰撞保护：`clearByPrefix("user")` 不误删 `userDetail` |
 | `testEvict_allEntries_byKeyPrefix` | `allEntries=true` 配合 `keyPrefix` 批量清除 |
 | `testEvict_byKeyPrefix` | keyPrefix 配对精确失效 |
 | `testEvict_beforeInvocation_evenOnException` | `beforeInvocation=true`：方法抛异常时缓存仍被清除 |
+
+### AdvancedBingCacheTest（自动化回归，`src/test/`，24 个用例）
+
+| 测试方法 | 验证要点 |
+|----------|----------|
+| `testOverloadedMethodKeyIsolation` | 重载方法默认前缀隔离（Long vs String） |
+| `testOverloadedMethodSameSerializedValue` | 序列化结果相同时不同类型参数仍能隔离 |
+| `testL1MissL2HitBackfill` | L1 miss + L2 hit 时回填 L1 |
+| `testBackfillWithRemainingTtl` | 回填时携带 L2 剩余 TTL |
+| `testNullValueOnlyInL1` | NullValueSentinel 只存 L1 不存 L2 |
+| `testClearIncrementsGlobalVersion` | `clear()` 触发全局版本号递增 |
+| `testClearByPrefixIncrementsVersion` | `clearByPrefix()` 触发单前缀版本号递增 |
+| `testRedisAvailable` | Redis 可用时正常读写 |
+| `testL1StillWorksWhenDegraded` | 降级后 L1 仍可正常读写 |
+| `testLongKeyTruncation` | 超长 key 自动截断 + SHA-256 后缀 |
+| `testDifferentLongParamsDifferentKeys` | 不同超长参数生成不同截断 key |
+| `testZeroExpireTimeNeverExpires` | 长过期时间不会提前过期 |
+| `testEmptyStringParam` | 空字符串参数 |
+| `testSpecialCharParam` | 特殊字符参数 |
+| `testChineseParam` | 中文参数 |
+| `testConcurrentCacheMissNoStampede` | 20 线程并发访问同一 key |
+| `testConcurrentReadWriteConsistency` | 并发读写数据一致性 |
+| `testL1MaxTtlDefaultFallback` | L1+L2 模式下自动兜底 300s |
+| `testL1EntryRespectsMaxTtl` | L1 条目不超过 l1MaxTtl |
+| `testCacheNamePriorityOverKeyPrefix` | cacheName 优先级高于 keyPrefix |
+| `testArgSpelIgnoresOtherFields` | argSpel 只用指定字段生成 key |
+| `testClearRemovesAllCaches` | `clear()` 清除 L1 和 L2 |
+| `testClearByPrefixOnlyRemovesTarget` | `clearByPrefix()` 只清除指定前缀 |
+| `testPrefixCollisionProtection` | 前缀碰撞保护：user 不影响 userDetail |
 
 ### MultiInstanceCacheTest（手动触发，需去掉 `@Disabled`）
 
@@ -164,7 +194,8 @@ bing-cache-test/
 │   │       └── application-instance3.yml      多实例 port 8083
 │   └── test/
 │       └── java/com/example/demo/
-│           ├── BingCacheTest.java             单实例功能回归测试（21 个用例）
+│           ├── BingCacheTest.java             单实例功能回归测试（22 个用例）
+│           ├── AdvancedBingCacheTest.java     高级功能测试（24 个用例）
 │           └── MultiInstanceCacheTest.java    多实例集成测试（需手动启用）
 ├── MULTI_INSTANCE_TEST.md          多实例测试详细说明
 └── README.md                       本文档
