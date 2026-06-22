@@ -17,6 +17,7 @@
 package com.bing.cache.aspect;
 
 import com.bing.cache.annotation.BingCacheEvict;
+import com.bing.cache.annotation.BingCacheEvicts;
 import com.bing.cache.cache.CacheManager;
 import com.bing.cache.util.CacheKeyGenerator;
 
@@ -77,13 +78,104 @@ public class CacheEvictAspect {
   @Around("@annotation(bingCacheEvict)")
   public Object around(ProceedingJoinPoint joinPoint, BingCacheEvict bingCacheEvict)
       throws Throwable {
+    return doAround(joinPoint, new BingCacheEvict[]{bingCacheEvict});
+  }
+
+  /**
+   * 环绕通知，拦截多个 @BingCacheEvict 注解方法.
+   *
+   * <p>当方法上标注了多个 {@code @BingCacheEvict} 时，
+   * Java 编译器会自动将它们包装在 {@code @BingCacheEvicts} 容器中。</p>
+   *
+   * @param joinPoint        连接点
+   * @param bingCacheEvicts 缓存清除注解容器
+   * @return 方法执行结果
+   * @throws Throwable 方法执行异常
+   */
+  @Around("@annotation(bingCacheEvicts)")
+  public Object aroundMultiple(ProceedingJoinPoint joinPoint, BingCacheEvicts bingCacheEvicts)
+      throws Throwable {
+    return doAround(joinPoint, bingCacheEvicts.value());
+  }
+
+  /**
+   * 执行环绕通知逻辑.
+   *
+   * @param joinPoint       连接点
+   * @param evictAnnotations 缓存清除注解数组（单个或多个）
+   * @return 方法执行结果
+   * @throws Throwable 方法执行异常
+   */
+  private Object doAround(ProceedingJoinPoint joinPoint, BingCacheEvict[] evictAnnotations)
+      throws Throwable {
     MethodSignature signature = (MethodSignature) joinPoint.getSignature();
     Method method = signature.getMethod();
     Object[] args = joinPoint.getArgs();
     Object target = joinPoint.getTarget();
 
-    // 未指定 cacheName 或 keyPrefix 时，默认前缀为当前方法名，可能与 @BingCache 的方法名不匹配
-    // 每个方法只警告一次，避免高频调用时日志风暴
+    // 检查每个注解的配置冲突（每个方法只警告一次）
+    for (BingCacheEvict bingCacheEvict : evictAnnotations) {
+      warnIfMissingPrefix(bingCacheEvict, method);
+      warnIfKeyAndArgIndexesConflict(bingCacheEvict, method);
+      warnIfArgIndexesEmptyWithMultipleParams(bingCacheEvict, method);
+    }
+
+    // 检查是否有 beforeInvocation=true 的注解
+    boolean hasBeforeInvocation = false;
+    for (BingCacheEvict bingCacheEvict : evictAnnotations) {
+      if (bingCacheEvict.beforeInvocation()) {
+        hasBeforeInvocation = true;
+        break;
+      }
+    }
+
+    if (hasBeforeInvocation) {
+      // beforeInvocation: 先清除缓存再执行方法
+      for (BingCacheEvict bingCacheEvict : evictAnnotations) {
+        if (bingCacheEvict.beforeInvocation()) {
+          doSingleEvict(bingCacheEvict, method, args, target);
+        }
+      }
+      Object result = joinPoint.proceed();
+      // 方法执行后清除剩余的（非 beforeInvocation 的）
+      for (BingCacheEvict bingCacheEvict : evictAnnotations) {
+        if (!bingCacheEvict.beforeInvocation()) {
+          doSingleEvict(bingCacheEvict, method, args, target);
+        }
+      }
+      return result;
+    } else {
+      // 默认: 方法执行后再清除缓存
+      Object result = joinPoint.proceed();
+      for (BingCacheEvict bingCacheEvict : evictAnnotations) {
+        doSingleEvict(bingCacheEvict, method, args, target);
+      }
+      return result;
+    }
+  }
+
+  /**
+   * 执行单个缓存清除操作.
+   *
+   * @param bingCacheEvict 缓存清除注解
+   * @param method         目标方法
+   * @param args           方法参数
+   * @param target         目标对象
+   */
+  private void doSingleEvict(BingCacheEvict bingCacheEvict, Method method,
+      Object[] args, Object target) {
+    // allEntries=true 时不需要生成 key
+    String key = bingCacheEvict.allEntries() ? null
+        : cacheKeyGenerator.generate(method, args, target,
+            bingCacheEvict.cacheName(), bingCacheEvict.keyPrefix(),
+            bingCacheEvict.argIndexes(), bingCacheEvict.argSpel());
+    doEvict(bingCacheEvict, key);
+  }
+
+  /**
+   * 未指定 cacheName 或 keyPrefix 时输出警告.
+   */
+  private void warnIfMissingPrefix(BingCacheEvict bingCacheEvict, Method method) {
     if ((bingCacheEvict.cacheName() == null || bingCacheEvict.cacheName().isEmpty())
         && (bingCacheEvict.keyPrefix() == null || bingCacheEvict.keyPrefix().isEmpty())) {
       String methodKey = method.getDeclaringClass().getName() + "#" + method.getName()
@@ -95,8 +187,12 @@ public class CacheEvictAspect {
             + "Consider setting cacheName to match @BingCache.", method.getName());
       }
     }
+  }
 
-    // argSpel 和 argIndexes 同时设置时，argSpel 优先，警告一次
+  /**
+   * argSpel 和 argIndexes 同时设置时输出警告.
+   */
+  private void warnIfKeyAndArgIndexesConflict(BingCacheEvict bingCacheEvict, Method method) {
     if (!bingCacheEvict.allEntries()
         && StringUtils.hasText(bingCacheEvict.argSpel())
         && bingCacheEvict.argIndexes() != null && bingCacheEvict.argIndexes().length > 0) {
@@ -108,8 +204,13 @@ public class CacheEvictAspect {
             method.getName());
       }
     }
+  }
 
-    // argIndexes 为空且方法有多个参数时，提醒检查 key 是否与 @BingCache 匹配
+  /**
+   * argIndexes 为空且方法有多个参数时输出警告.
+   */
+  private void warnIfArgIndexesEmptyWithMultipleParams(BingCacheEvict bingCacheEvict,
+      Method method) {
     if (!bingCacheEvict.allEntries()
         && !StringUtils.hasText(bingCacheEvict.argSpel())
         && (bingCacheEvict.argIndexes() == null || bingCacheEvict.argIndexes().length == 0)
@@ -124,21 +225,6 @@ public class CacheEvictAspect {
             + "Set argIndexes on @BingCacheEvict to match @BingCache.",
             method.getName(), method.getParameterCount());
       }
-    }
-
-    // allEntries=true 时不需要生成 key，避免无意义的 key 生成和潜在的 argIndexes 越界异常
-    String key = bingCacheEvict.allEntries() ? null
-        : cacheKeyGenerator.generate(method, args, target,
-            bingCacheEvict.cacheName(), bingCacheEvict.keyPrefix(),
-            bingCacheEvict.argIndexes(), bingCacheEvict.argSpel());
-
-    if (bingCacheEvict.beforeInvocation()) {
-      doEvict(bingCacheEvict, key);
-      return joinPoint.proceed();
-    } else {
-      Object result = joinPoint.proceed();
-      doEvict(bingCacheEvict, key);
-      return result;
     }
   }
 

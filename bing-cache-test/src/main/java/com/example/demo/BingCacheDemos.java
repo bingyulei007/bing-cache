@@ -165,7 +165,68 @@ public class BingCacheDemos {
     return "Item-String:" + code + " [time:" + System.currentTimeMillis() + "]";
   }
 
-  // ==================== 场景7: beforeInvocation ====================
+  // ==================== 场景7: 多缓存协同失效 ====================
+
+    /**
+     * 用户详情 — 按 id 缓存
+     *
+     * key 格式: userAccount([1])
+     */
+    @BingCache(cacheName = "userAccount", expireTime = 300)
+    public String getUserAccount(Long id) {
+        return "Account-" + id + " [time:" + System.currentTimeMillis() + "]";
+    }
+
+    /**
+     * 用户订单列表 — 按 userId 缓存
+     *
+     * key 格式: userOrders([1])
+     */
+    @BingCache(cacheName = "userOrders", expireTime = 120)
+    public String getUserOrders(Long userId) {
+        return "Orders-" + userId + " [time:" + System.currentTimeMillis() + "]";
+    }
+
+    /**
+     * 用户统计数据 — 全局缓存
+     *
+     * key 格式: userStats([])
+     */
+    @BingCache(cacheName = "userStats", expireTime = 600)
+    public String getUserStats() {
+        return "Stats [time:" + System.currentTimeMillis() + "]";
+    }
+
+    /**
+     * 更新用户账号 — 需要同时清除账号详情和订单列表
+     *
+     * 多个 @BingCacheEvict 协同清除：
+     * - userAccount: 清除该用户的账号详情
+     * - userOrders: 清除该用户的订单列表
+     */
+    @BingCacheEvict(cacheName = "userAccount", argIndexes = {0})
+    @BingCacheEvict(cacheName = "userOrders", argIndexes = {0})
+    public void updateUserAccount(Long id, String name) {
+        System.out.println("[DB] 更新用户账号 " + id + " 的名字为 " + name);
+    }
+
+    /**
+     * 新增订单 — 只需清除订单列表，无需清除账号详情
+     */
+    @BingCacheEvict(cacheName = "userOrders", argIndexes = {0})
+    public void createOrder(Long userId, String orderId) {
+        System.out.println("[DB] 为用户 " + userId + " 创建订单 " + orderId);
+    }
+
+    /**
+     * 刷新统计数据 — 只清除统计缓存
+     */
+    @BingCacheEvict(cacheName = "userStats", allEntries = true)
+    public void refreshUserStats() {
+        System.out.println("[DB] 刷新用户统计");
+    }
+
+  // ==================== 场景8: beforeInvocation ====================
 
     /**
      * 强制刷新配置 - 方法执行前就清除缓存

@@ -17,6 +17,7 @@
 package com.bing.cache.annotation;
 
 import java.lang.annotation.ElementType;
+import java.lang.annotation.Repeatable;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
@@ -30,9 +31,18 @@ import java.lang.annotation.Target;
  * <p>默认行为：方法成功执行后清除指定 key 的缓存。
  * 可通过 {@link #allEntries()} 清空所有缓存，
  * 或通过 {@link #beforeInvocation()} 在方法执行前清除。</p>
+ *
+ * <p>支持重复使用：当一个写操作需要清除多个缓存时，可以在同一方法上
+ * 标注多个 {@code @BingCacheEvict}，每个清除不同的 cacheName：</p>
+ * <pre>
+ * &#64;BingCacheEvict(cacheName = "userAccount", argIndexes = {0})
+ * &#64;BingCacheEvict(cacheName = "userOrders", argIndexes = {0})
+ * public void updateUser(Long id, UserVO vo) { ... }
+ * </pre>
  */
 @Target(ElementType.METHOD)
 @Retention(RetentionPolicy.RUNTIME)
+@Repeatable(BingCacheEvicts.class)
 public @interface BingCacheEvict {
 
   /**

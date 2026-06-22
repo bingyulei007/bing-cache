@@ -463,4 +463,76 @@ public class BingCacheTest {
         // 这里通过"未抛异常 + 不为 null"做软验证；严谨验证见下方
         assertNotNull(after);
     }
+
+    // ========== 多缓存协同失效测试 ==========
+
+    /**
+     * 更新用户账号时，同时清除 userAccount 和 userOrders 两个缓存。
+     * 验证多 @BingCacheEvict 协同生效。
+     */
+    @Test
+    void testEvict_multiCache_updateUserAccount() throws InterruptedException {
+        Long userId = 301L;
+
+        // 准备缓存
+        String account = bingCacheDemos.getUserAccount(userId);
+        String orders = bingCacheDemos.getUserOrders(userId);
+        Thread.sleep(2);
+
+        // 更新用户账号 — 应同时清除 account 和 orders
+        bingCacheDemos.updateUserAccount(userId, "new-name");
+
+        // 验证两个缓存都被清除
+        String accountAfter = bingCacheDemos.getUserAccount(userId);
+        String ordersAfter = bingCacheDemos.getUserOrders(userId);
+        assertNotEquals(account, accountAfter, "userAccount 应被清除");
+        assertNotEquals(orders, ordersAfter, "userOrders 应被清除");
+    }
+
+    /**
+     * 新增订单时，只清除 userOrders，不影响 userAccount。
+     */
+    @Test
+    void testEvict_multiCache_createOrder() throws InterruptedException {
+        Long userId = 302L;
+
+        // 准备缓存
+        String account = bingCacheDemos.getUserAccount(userId);
+        String orders = bingCacheDemos.getUserOrders(userId);
+        Thread.sleep(2);
+
+        // 新增订单 — 只清除 orders
+        bingCacheDemos.createOrder(userId, "ORDER-001");
+
+        // 验证 orders 被清除，account 保留
+        String accountAfter = bingCacheDemos.getUserAccount(userId);
+        String ordersAfter = bingCacheDemos.getUserOrders(userId);
+        assertEquals(account, accountAfter, "userAccount 不应被清除");
+        assertNotEquals(orders, ordersAfter, "userOrders 应被清除");
+    }
+
+    /**
+     * 刷新统计时，只清除 userStats，不影响其他缓存。
+     */
+    @Test
+    void testEvict_multiCache_refreshStats() throws InterruptedException {
+        Long userId = 303L;
+
+        // 准备缓存
+        String account = bingCacheDemos.getUserAccount(userId);
+        String orders = bingCacheDemos.getUserOrders(userId);
+        String stats = bingCacheDemos.getUserStats();
+        Thread.sleep(2);
+
+        // 刷新统计 — 只清除 stats
+        bingCacheDemos.refreshUserStats();
+
+        // 验证 stats 被清除，其他保留
+        String accountAfter = bingCacheDemos.getUserAccount(userId);
+        String ordersAfter = bingCacheDemos.getUserOrders(userId);
+        String statsAfter = bingCacheDemos.getUserStats();
+        assertEquals(account, accountAfter, "userAccount 不应被清除");
+        assertEquals(orders, ordersAfter, "userOrders 不应被清除");
+        assertNotEquals(stats, statsAfter, "userStats 应被清除");
+    }
 }
