@@ -585,7 +585,7 @@ private CacheManager cacheManager;
 // 清除指定 key 的缓存
 cacheManager.evict("user([N:1])");
 
-// 清除指定前缀下的所有缓存
+// 清除指定 cacheName 下的所有缓存（精确匹配 "user(" 前缀，不会误删 "userDetail" 等）
 cacheManager.clearByPrefix("user");
 
 // 清空所有缓存
