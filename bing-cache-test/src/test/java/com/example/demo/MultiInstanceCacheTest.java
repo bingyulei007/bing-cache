@@ -35,7 +35,7 @@ public class MultiInstanceCacheTest {
 
     private static final String INSTANCE1_URL = "http://localhost:8081";
     private static final String INSTANCE2_URL = "http://localhost:8082";
-    private static final String INSTANCE3_URL = "http://localhost:8084";
+    private static final String INSTANCE3_URL = "http://localhost:8083";
 
     private RestClient client1;
     private RestClient client2;

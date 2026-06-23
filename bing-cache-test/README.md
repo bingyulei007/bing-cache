@@ -49,7 +49,7 @@ mvn -pl bing-cache-test -am spring-boot:run
 
 ## 测试覆盖
 
-### BingCacheTest（自动化回归，`src/test/`，22 个用例）
+### BingCacheTest（自动化回归，`src/test/`，25 个用例）
 
 | 测试方法 | 验证要点 |
 |----------|----------|
@@ -194,7 +194,7 @@ bing-cache-test/
 │   │       └── application-instance3.yml      多实例 port 8083
 │   └── test/
 │       └── java/com/example/demo/
-│           ├── BingCacheTest.java             单实例功能回归测试（22 个用例）
+│           ├── BingCacheTest.java             单实例功能回归测试（25 个用例）
 │           ├── AdvancedBingCacheTest.java     高级功能测试（24 个用例）
 │           └── MultiInstanceCacheTest.java    多实例集成测试（需手动启用）
 ├── MULTI_INSTANCE_TEST.md          多实例测试详细说明
@@ -225,6 +225,7 @@ spring:
       host: cmac-mini
       port: 6379
       password: RedRain123
+      database: 0
 ```
 
 如需在本地 Redis 运行，修改 `host` 为 `localhost` 并去掉 `password` 即可。
