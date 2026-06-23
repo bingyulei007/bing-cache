@@ -4,7 +4,7 @@
 
 ## 特性
 
-- **注解驱动**：`@BingCache` 缓存读取、`@BingCacheEvict` 缓存清除，零侵入业务代码
+- **注解驱动**：`@BingCache` 缓存读取、`@BingCacheEvict` 缓存清除（支持 `@Repeatable` 多缓存协同失效），零侵入业务代码
 - **两级缓存**：L1(Caffeine) + L2(Redis) 组合，L1 未命中自动回填并携带 L2 剩余 TTL
 - **跨实例失效**：基于 Redis Pub/Sub 广播缓存失效消息，多实例部署时 L1 缓存自动同步
 - **版本对账**：定时检查 Redis 版本号变化，补偿 Pub/Sub 消息丢失，确保最终一致性
@@ -104,7 +104,7 @@ public class DictService {
 | 属性 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `cacheName` | String | `""` | 缓存名称，用于与 `@BingCacheEvict` 共享同一前缀，优先级最高 |
-| `keyPrefix` | String | `""` | 缓存 key 前缀，为空时使用"类全限定名.方法名"；`cacheName` 不为空时忽略 |
+| `keyPrefix` | String | `""` | 缓存 key 前缀，为空时使用"类全限定名.方法名(参数类型签名)"；`cacheName` 不为空时忽略 |
 | `expireTime` | int | `0` | 过期时间（秒），`0` 表示不过期 |
 | `argIndexes` | int[] | `{}` | 参与 key 生成的参数索引，空数组表示全部参数参与；`argSpel` 非空时忽略 |
 | `argSpel` | String | `""` | SpEL 表达式，从参数中选取值参与 key 生成（如 `#user.id`）；非空时优先于 `argIndexes` |
@@ -223,7 +223,7 @@ public UserVO getUser(UserVO user) { ... }
 
 ### @BingCacheEvict — 缓存清除
 
-标注在更新/删除方法上，方法执行后（或执行前）自动清除对应的缓存条目。
+标注在更新/删除方法上，方法执行后（或执行前）自动清除对应的缓存条目。支持在同一方法上重复使用（`@Repeatable`），用于一个写操作需要清除多个缓存的场景。
 
 | 属性 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
@@ -349,7 +349,7 @@ public class UserService {
 
 1. **`cacheName`**（最高）— 如 `user`
 2. **`keyPrefix`** — 如 `user:detail`
-3. **默认** — 类全限定名.方法名，如 `com.example.UserService.getUserById`
+3. **默认** — 类全限定名.方法名(参数类型签名)，如 `com.example.UserService.getUserById(java.lang.Long)`
 
 ### 参数选取方式
 
@@ -665,7 +665,7 @@ INFO  Bing Cache: Redis L2 cache has recovered from degradation                 
 
 8. **`allEntries` 清除范围**：`@BingCacheEvict(allEntries = true)` 配合 `cacheName` 或 `keyPrefix` 时，只清除该前缀下的缓存条目；都不指定时才全局清空。
 
-9. **`clearByPrefix` 字面前缀语义**：`cacheManager.clearByPrefix(prefix)` 内部对 Redis SCAN 的 glob 结果做 `startsWith` 二次过滤，确保与 `CaffeineCacheManager.clearByPrefix` 的字面前缀语义一致。`prefix` 中的 `*`、`?`、`[`、`]` 等 Redis glob 元字符会被当作字面字符处理，不会展开为通配符。例如 `prefix="user*"` 只匹配字面以 `user*` 开头的 key，不会匹配 `userCache`、`userProfile` 等。
+9. **`clearByPrefix` 精确匹配语义**：`cacheManager.clearByPrefix(prefix)` 内部匹配 `prefix + "("` 开头的 key，确保只清除指定 cacheName 的缓存，不会误删前缀相同的其他 cacheName（如 `clearByPrefix("user")` 不会误删 `userDetail` 的 key）。Redis SCAN 的 glob 结果会通过 `startsWith` 二次过滤，`prefix` 中的 `*`、`?` 等元字符被当作字面字符处理。
 
 10. **`@BingCacheEvict` 未指定 cacheName/keyPrefix 时会输出警告**：当 `@BingCacheEvict` 既没有设置 `cacheName` 也没有设置 `keyPrefix` 时，默认前缀为当前方法名（如 `updateUser`），而对应的 `@BingCache` 方法默认前缀是其方法名（如 `getUserById`），两者不匹配会导致 evict 静默失效。组件会输出 WARN 日志提醒：
 
