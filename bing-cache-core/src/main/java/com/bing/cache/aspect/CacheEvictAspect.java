@@ -174,10 +174,18 @@ public class CacheEvictAspect {
 
   /**
    * 未指定 cacheName 或 keyPrefix 时输出警告.
+   *
+   * <p>当 group 非空且 allEntries=true 时跳过警告，
+   * 因为此时走 clearByGroup 分支，不需要 cacheName/keyPrefix。</p>
    */
   private void warnIfMissingPrefix(BingCacheEvict bingCacheEvict, Method method) {
     if ((bingCacheEvict.cacheName() == null || bingCacheEvict.cacheName().isEmpty())
         && (bingCacheEvict.keyPrefix() == null || bingCacheEvict.keyPrefix().isEmpty())) {
+      // group + allEntries=true 是合法用法（走 clearByGroup），不需要 cacheName/keyPrefix
+      String group = bingCacheEvict.group();
+      if (group != null && !group.isEmpty() && bingCacheEvict.allEntries()) {
+        return;
+      }
       String methodKey = method.getDeclaringClass().getName() + "#" + method.getName()
           + "(" + method.getParameterCount() + " params)";
       if (warnedMethods.add(methodKey)) {
