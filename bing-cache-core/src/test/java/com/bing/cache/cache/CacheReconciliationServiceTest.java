@@ -179,6 +179,71 @@ class CacheReconciliationServiceTest {
   }
 
   /**
+   * 测试 group 版本号变化时按 group 清除 L1 缓存.
+   */
+  @Test
+  void testGroupVersionChangeClearsByGroup() {
+    // 首次对账：记录 group 版本号
+    when(versionStore.getAllVersion()).thenReturn(0L);
+    when(versionStore.getActiveCacheNames()).thenReturn(Optional.of(Set.of()));
+    when(versionStore.getActiveGroups()).thenReturn(Optional.of(Set.of("user")));
+    when(versionStore.getGroupVersion("user")).thenReturn(1L);
+    service.reconcile();
+
+    // group 版本号变化
+    when(versionStore.getGroupVersion("user")).thenReturn(2L);
+    service.reconcile();
+
+    verify(l1CacheManager).clearByGroup("user");
+  }
+
+  /**
+   * 测试 group 版本号未变化时不清除缓存.
+   */
+  @Test
+  void testGroupVersionUnchangedDoesNotClear() {
+    // 首次对账
+    when(versionStore.getAllVersion()).thenReturn(0L);
+    when(versionStore.getActiveCacheNames()).thenReturn(Optional.of(Set.of()));
+    when(versionStore.getActiveGroups()).thenReturn(Optional.of(Set.of("user")));
+    when(versionStore.getGroupVersion("user")).thenReturn(1L);
+    service.reconcile();
+
+    // 版本号未变化
+    when(versionStore.getGroupVersion("user")).thenReturn(1L);
+    service.reconcile();
+
+    verify(l1CacheManager, never()).clearByGroup(anyString());
+  }
+
+  /**
+   * 测试全局版本变化时刷新 group 版本状态（清理已废弃 group）.
+   */
+  @Test
+  void testGlobalVersionChangeRefreshesGroupVersions() {
+    // 首次对账：记录 group 版本
+    when(versionStore.getAllVersion()).thenReturn(0L);
+    when(versionStore.getActiveCacheNames()).thenReturn(Optional.of(Set.of()));
+    when(versionStore.getActiveGroups()).thenReturn(Optional.of(Set.of("user", "order")));
+    when(versionStore.getGroupVersion("user")).thenReturn(1L);
+    when(versionStore.getGroupVersion("order")).thenReturn(1L);
+    service.reconcile();
+    assertTrue(lastKnownGroupVersions().containsKey("user"));
+    assertTrue(lastKnownGroupVersions().containsKey("order"));
+
+    // 全局版本变化，order group 已废弃
+    when(versionStore.getAllVersion()).thenReturn(1L);
+    when(versionStore.getActiveCacheNames()).thenReturn(Optional.of(Set.of()));
+    when(versionStore.getActiveGroups()).thenReturn(Optional.of(Set.of("user")));
+    when(versionStore.getGroupVersion("user")).thenReturn(1L);
+    service.reconcile();
+
+    // order 应被清理，user 保留
+    assertFalse(lastKnownGroupVersions().containsKey("order"));
+    assertTrue(lastKnownGroupVersions().containsKey("user"));
+  }
+
+  /**
    * 测试生命周期：start/stop.
    */
   @Test
@@ -204,6 +269,17 @@ class CacheReconciliationServiceTest {
   private Map<String, Long> lastKnownVersions() {
     try {
       Field field = CacheReconciliationService.class.getDeclaredField("lastKnownVersions");
+      field.setAccessible(true);
+      return (Map<String, Long>) field.get(service);
+    } catch (ReflectiveOperationException e) {
+      throw new AssertionError(e);
+    }
+  }
+
+  @SuppressWarnings("unchecked")
+  private Map<String, Long> lastKnownGroupVersions() {
+    try {
+      Field field = CacheReconciliationService.class.getDeclaredField("lastKnownGroupVersions");
       field.setAccessible(true);
       return (Map<String, Long>) field.get(service);
     } catch (ReflectiveOperationException e) {

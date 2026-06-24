@@ -199,6 +199,72 @@ class CaffeineCacheManagerTest {
         "userInfo cache should NOT be cleared (prefix collision protection)");
   }
 
+  // ========== clearByGroup 相关测试 ==========
+
+  /**
+   * 测试按分组清除缓存：只清除指定 group 下的 key.
+   */
+  @Test
+  void testClearByGroup() {
+    cacheManager.put("user:base([1])", "u1", 0);
+    cacheManager.put("user:list([S:a])", "list1", 0);
+    cacheManager.put("order:base([1])", "o1", 0);
+
+    cacheManager.clearByGroup("user");
+
+    assertNull(cacheManager.get("user:base([1])"));
+    assertNull(cacheManager.get("user:list([S:a])"));
+    assertEquals("o1", cacheManager.get("order:base([1])"));
+  }
+
+  /**
+   * 测试按分组清除时 group 名不匹配任何 key.
+   */
+  @Test
+  void testClearByGroupNoMatch() {
+    cacheManager.put("user:base([1])", "u1", 0);
+
+    cacheManager.clearByGroup("order");
+
+    assertEquals("u1", cacheManager.get("user:base([1])"));
+  }
+
+  /**
+   * 测试 clearByGroup 不会误清 group 名是其他 group 前缀的缓存.
+   *
+   * <p>group="user" 匹配 {@code "user:"} 前缀，不应误清
+   * group="userDetail" 的 {@code "userDetail:"} 开头的 key。</p>
+   */
+  @Test
+  void testClearByGroupDoesNotCollideWithSimilarGroupName() {
+    cacheManager.put("user:base([1])", "u1", 0);
+    cacheManager.put("userDetail:base([1])", "ud1", 0);
+
+    cacheManager.clearByGroup("user");
+
+    assertNull(cacheManager.get("user:base([1])"), "user group should be cleared");
+    assertEquals("ud1", cacheManager.get("userDetail:base([1])"),
+        "userDetail group should NOT be cleared");
+  }
+
+  /**
+   * 测试 clearByGroup 不会误清未使用 group 的同 cacheName 缓存.
+   *
+   * <p>未启用 group 时 key 格式为 {@code cacheName(args)}，不以 {@code "group:"} 开头，
+   * 不应被 clearByGroup 清除。但若 cacheName 含冒号（如 {@code "user:detail"}），
+   * key 为 {@code "user:detail(args)"}，会被 {@code clearByGroup("user")} 误清——
+   * 这是 README 已警示的"group 命名空间与冒号 cacheName 互斥"约束。</p>
+   */
+  @Test
+  void testClearByGroupDoesNotClearNonGroupedCache() {
+    cacheManager.put("user([1])", "u1", 0);  // 无 group，key 不以 "user:" 开头
+
+    cacheManager.clearByGroup("user");
+
+    assertEquals("u1", cacheManager.get("user([1])"),
+        "non-grouped cache should NOT be cleared by clearByGroup");
+  }
+
   // ========== per-entry Expiry 相关测试 ==========
 
   /**

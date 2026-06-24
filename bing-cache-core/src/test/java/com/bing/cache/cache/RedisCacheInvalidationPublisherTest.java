@@ -89,4 +89,18 @@ class RedisCacheInvalidationPublisherTest {
     // Should not throw
     publisher.publishClearByPrefix("user");
   }
+
+  @Test
+  void testPublishClearByGroup() {
+    publisher.publishClearByGroup("user");
+    verify(stringRedisTemplate).convertAndSend(eq("bing-cache:invalidation"), anyString());
+  }
+
+  @Test
+  void testPublishClearByGroupHandlesException() {
+    org.mockito.Mockito.doThrow(new RuntimeException("Redis connection failed"))
+        .when(stringRedisTemplate).convertAndSend(anyString(), anyString());
+    // Should not throw
+    publisher.publishClearByGroup("user");
+  }
 }

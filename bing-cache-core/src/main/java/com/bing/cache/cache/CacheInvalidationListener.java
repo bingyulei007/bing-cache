@@ -93,12 +93,12 @@ public class CacheInvalidationListener {
           LOG.debug("Received cache invalidation: CLEAR_PREFIX prefix={}", message.getKey());
           break;
         case CLEAR_GROUP:
-          if (message.getKey() == null) {
-            LOG.warn("Ignoring CLEAR_GROUP message with null key: {}", messageJson);
+          if (message.getGroup() == null) {
+            LOG.warn("Ignoring CLEAR_GROUP message with null group: {}", messageJson);
             return;
           }
-          l1CacheManager.clearByGroup(message.getKey());
-          LOG.debug("Received cache invalidation: CLEAR_GROUP group={}", message.getKey());
+          l1CacheManager.clearByGroup(message.getGroup());
+          LOG.debug("Received cache invalidation: CLEAR_GROUP group={}", message.getGroup());
           break;
         default:
           LOG.warn("Unknown cache invalidation type: {}", message.getType());

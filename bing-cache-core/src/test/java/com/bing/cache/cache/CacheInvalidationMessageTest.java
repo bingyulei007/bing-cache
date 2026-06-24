@@ -112,6 +112,52 @@ class CacheInvalidationMessageTest {
     assertEquals(original.getInstanceId(), deserialized.getInstanceId());
   }
 
+  @Test
+  void testClearGroupMessage() {
+    CacheInvalidationMessage message = CacheInvalidationMessage.clearGroup("user", "instance-1");
+    assertEquals(CacheInvalidationMessage.Type.CLEAR_GROUP, message.getType());
+    assertEquals("user", message.getGroup());
+    assertNull(message.getKey(), "CLEAR_GROUP message should not populate key field");
+    assertEquals("instance-1", message.getInstanceId());
+    assertTrue(message.getTimestamp() > 0);
+  }
+
+  @Test
+  void testClearGroupMessageJsonRoundTrip() {
+    CacheInvalidationMessage original = CacheInvalidationMessage.clearGroup("user", "inst-e");
+    String json = original.toJson();
+    assertNotNull(json);
+    assertTrue(json.contains("CLEAR_GROUP"));
+    assertTrue(json.contains("\"group\":\"user\""));
+    assertTrue(json.contains("inst-e"));
+
+    CacheInvalidationMessage deserialized = CacheInvalidationMessage.fromJson(json);
+    assertEquals(original.getType(), deserialized.getType());
+    assertEquals(original.getGroup(), deserialized.getGroup());
+    assertNull(deserialized.getKey(), "CLEAR_GROUP key field should remain null after round-trip");
+    assertEquals(original.getTimestamp(), deserialized.getTimestamp());
+    assertEquals(original.getInstanceId(), deserialized.getInstanceId());
+  }
+
+  /**
+   * 测试未知 type 反序列化为 null（滚动升级降级）.
+   *
+   * <p>OBJECT_MAPPER 启用了 READ_UNKNOWN_ENUM_VALUES_AS_NULL，
+   * 旧实例收到新版本发送的未知 Type 时应反序列化为 null，
+   * 而非抛 InvalidFormatException。CacheInvalidationListener 会走 type == null → WARN 分支，
+   * 不会输出 ERROR + 堆栈。</p>
+   */
+  @Test
+  void testUnknownTypeDeserializesToNull() {
+    // 模拟未来版本发送的未知 type：手造 JSON，type 字段使用不存在的枚举值
+    String jsonFromFutureVersion = "{\"type\":\"CLEAR_GROUP2\",\"group\":\"user\","
+        + "\"timestamp\":1234567890,\"instanceId\":\"future-inst\"}";
+    CacheInvalidationMessage deserialized = CacheInvalidationMessage.fromJson(jsonFromFutureVersion);
+    assertNull(deserialized.getType(), "Unknown enum value should deserialize to null");
+    assertEquals("user", deserialized.getGroup());
+    assertEquals("future-inst", deserialized.getInstanceId());
+  }
+
   private void assertTrue(boolean condition) {
     if (!condition) {
       throw new AssertionError("Expected true but was false");

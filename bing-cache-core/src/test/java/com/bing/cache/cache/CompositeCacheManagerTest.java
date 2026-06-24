@@ -141,6 +141,20 @@ class CompositeCacheManagerTest {
     verify(publisher).publishClearByPrefix("user");
   }
 
+  /**
+   * 测试 clearByGroup 委托 L2 + L1 + Pub/Sub，且 versionStore=null 时不递增版本号.
+   *
+   * <p>构造时未传 versionStore（null），incrementGroupVersion 应跳过，
+   * 不抛 NPE。委托顺序：L2 → L1 → publish（与 clearByPrefix 一致）。</p>
+   */
+  @Test
+  void testClearByGroupClearsBothLevelsAndPublishes() {
+    compositeCacheManager.clearByGroup("user");
+    verify(l2CacheManager).clearByGroup("user");
+    verify(l1CacheManager).clearByGroup("user");
+    verify(publisher).publishClearByGroup("user");
+  }
+
   // ========== 回填竞态测试 ==========
 
   /**

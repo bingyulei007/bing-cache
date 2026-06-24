@@ -101,4 +101,25 @@ class CacheInvalidationListenerTest {
     listener.handleMessage(message.toJson());
     verifyNoInteractions(l1CacheManager);
   }
+
+  /**
+   * 回归测试：CLEAR_GROUP 消息应通过 group 字段（而非 key 字段）传递 group 名.
+   *
+   * <p>历史 bug：listener 误读 {@code message.getKey()}，而 clearGroup() 工厂方法
+   * 把 group 名存在 {@code group} 字段，{@code key} 字段为 null，
+   * 导致每条 CLEAR_GROUP 消息都被当作 null key 丢弃，跨实例 group 失效完全失效。</p>
+   */
+  @Test
+  void testHandleClearGroupMessageFromOtherInstance() {
+    CacheInvalidationMessage message = CacheInvalidationMessage.clearGroup("user", "other-instance");
+    listener.handleMessage(message.toJson());
+    verify(l1CacheManager).clearByGroup("user");
+  }
+
+  @Test
+  void testIgnoreSelfPublishedClearGroupMessage() {
+    CacheInvalidationMessage message = CacheInvalidationMessage.clearGroup("user", INSTANCE_ID);
+    listener.handleMessage(message.toJson());
+    verifyNoInteractions(l1CacheManager);
+  }
 }
