@@ -237,6 +237,78 @@ public class BingCacheDemos {
         throw new RuntimeException("模拟更新失败");
     }
 
+  // ==================== 场景9: group 分组缓存 ====================
+
+    /**
+     * 管理后台用户查询 — 归属 "admin" 分组.
+     *
+     * <p>key 格式: admin:user(Sg[N:1])</p>
+     */
+    @BingCache(group = "admin", cacheName = "user", expireTime = 300)
+    public String getAdminUser(Long id) {
+        return "AdminUser-" + id + " [time:" + System.currentTimeMillis() + "]";
+    }
+
+    /**
+     * 管理后台字典查询 — 归属 "admin" 分组.
+     *
+     * <p>key 格式: admin:dict(Sg[S:type1])</p>
+     */
+    @BingCache(group = "admin", cacheName = "dict", expireTime = 3600)
+    public String getAdminDict(String dictType) {
+        return "AdminDict[" + dictType + "] [time:" + System.currentTimeMillis() + "]";
+    }
+
+    /**
+     * 清除 admin 分组下所有缓存 — 一个注解清除 admin:user 和 admin:dict.
+     */
+    @BingCacheEvict(group = "admin", allEntries = true)
+    public void clearAdminGroup() {
+        System.out.println("[Evict] 清除 admin 分组所有缓存");
+    }
+
+    /**
+     * 清除 portal 分组下所有缓存（portal 下无 @BingCache 方法，用于测试分组隔离）.
+     */
+    @BingCacheEvict(group = "portal", allEntries = true)
+    public void clearPortalGroup() {
+        System.out.println("[Evict] 清除 portal 分组所有缓存");
+    }
+
+    /**
+     * 全局清空所有缓存 — 不指定 group/cacheName/keyPrefix.
+     */
+    @BingCacheEvict(allEntries = true)
+    public void clearAll() {
+        System.out.println("[Evict] 全局清空所有缓存");
+    }
+
+    // ==================== 场景10: 保留名校验（应抛异常） ====================
+
+    /**
+     * 使用保留 group 名 — 应抛 IllegalStateException.
+     */
+    @BingCacheEvict(group = "__version__", allEntries = true)
+    public void clearWithReservedGroup() {
+        System.out.println("[Evict] 不应执行到此");
+    }
+
+    /**
+     * 使用保留 cacheName — 应抛 IllegalStateException.
+     */
+    @BingCacheEvict(cacheName = "__all__", allEntries = true)
+    public void clearWithReservedCacheName() {
+        System.out.println("[Evict] 不应执行到此");
+    }
+
+    /**
+     * 使用保留 cacheName 前缀 — 应抛 IllegalStateException.
+     */
+    @BingCacheEvict(cacheName = "__group__:user", allEntries = true)
+    public void clearWithReservedCacheNamePrefix() {
+        System.out.println("[Evict] 不应执行到此");
+    }
+
     public static class UserDetailQuery {
         private Long id;
         private String source;

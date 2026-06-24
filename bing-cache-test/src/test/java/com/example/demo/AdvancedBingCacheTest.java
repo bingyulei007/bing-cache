@@ -185,7 +185,7 @@ public class AdvancedBingCacheTest {
             cacheManager.clear();
 
             // 验证缓存被清空
-            assertNull(composite.getL1CacheManager().get("user([N:1])"),
+            assertNull(composite.getL1CacheManager().get("user(Sg[N:1])"),
                 "clear() 后 L1 应为空");
         }
 
@@ -204,8 +204,8 @@ public class AdvancedBingCacheTest {
             cacheManager.clearByPrefix("user");
 
             // 验证 user 缓存被清空
-            // 注意：实际 key 格式为 user([N:1])，clearByPrefix 会匹配 user(
-            assertNull(composite.getL1CacheManager().get("user([N:1])"),
+            // 注意：实际 key 格式为 user(Sg[N:1])，clearByPrefix 会匹配 user(
+            assertNull(composite.getL1CacheManager().get("user(Sg[N:1])"),
                 "clearByPrefix('user') 后 user 缓存应为空");
         }
     }
@@ -518,12 +518,12 @@ public class AdvancedBingCacheTest {
         cacheManager.clear();
 
         // 验证 L1 为空
-        assertNull(composite.getL1CacheManager().get("user([N:1])"));
-        assertNull(composite.getL1CacheManager().get("user([N:2])"));
+        assertNull(composite.getL1CacheManager().get("user(Sg[N:1])"));
+        assertNull(composite.getL1CacheManager().get("user(Sg[N:2])"));
 
         // 验证 L2 为空
-        assertNull(composite.getL2CacheManager().get("user([N:1])"));
-        assertNull(composite.getL2CacheManager().get("user([N:2])"));
+        assertNull(composite.getL2CacheManager().get("user(Sg[N:1])"));
+        assertNull(composite.getL2CacheManager().get("user(Sg[N:2])"));
     }
 
     @Test
@@ -541,11 +541,11 @@ public class AdvancedBingCacheTest {
         cacheManager.clearByPrefix("user");
 
         // user 应被清除
-        assertNull(composite.getL1CacheManager().get("user([N:1])"),
+        assertNull(composite.getL1CacheManager().get("user(Sg[N:1])"),
             "user 缓存应被清除");
 
         // dict 应保留
-        assertNotNull(composite.getL1CacheManager().get("dict([S:type1])"),
+        assertNotNull(composite.getL1CacheManager().get("dict(Sg[S:type1])"),
             "dict 缓存不应被清除");
     }
 
