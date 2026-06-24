@@ -41,7 +41,12 @@ import java.util.Set;
  * <ul>
  *   <li>{@code bing-cache:__version__:{cacheName}} — 指定 cacheName 的版本号</li>
  *   <li>{@code bing-cache:__version__:__all__} — 全局版本号（allEntries 无 cacheName 时递增）</li>
+ *   <li>{@code bing-cache:__version__:__group__:groupName} — 指定 group 的版本号</li>
  * </ul>
+ *
+ * <p><b>保留前缀约束：</b>{@code __all__} 和 {@code __group__:}
+ * 是内部保留的 cacheName 前缀，业务侧不应使用以 {@code __group__:}
+ * 开头或等于 {@code __all__} 的 cacheName，否则版本对账失效。</p>
  */
 public class CacheVersionStore {
 
@@ -49,6 +54,9 @@ public class CacheVersionStore {
 
   /** 全局版本号的 key 后缀. */
   static final String ALL_VERSION_SUFFIX = "__all__";
+
+  /** Group 版本号 key 的前缀分隔符，与 {@link #ALL_VERSION_SUFFIX} 风格一致. */
+  static final String GROUP_VERSION_PREFIX = "__group__:";
 
   private final StringRedisTemplate stringRedisTemplate;
 
@@ -97,7 +105,17 @@ public class CacheVersionStore {
    * @return 递增后的版本号
    */
   public long incrementGroupVersion(String group) {
-    return incrementVersion(group);
+    return incrementVersion(GROUP_VERSION_PREFIX + group);
+  }
+
+  /**
+   * 获取指定 group 的当前版本号.
+   *
+   * @param group 缓存分组名称
+   * @return 版本号，key 不存在时返回 0
+   */
+  public long getGroupVersion(String group) {
+    return getVersion(GROUP_VERSION_PREFIX + group);
   }
 
   /**
@@ -152,10 +170,43 @@ public class CacheVersionStore {
       try (var cursor = keyCommands.scan(options)) {
         while (cursor.hasNext()) {
           String key = new String(cursor.next(), StandardCharsets.UTF_8);
-          names.add(key.substring(versionKeyPrefix.length()));
+          String name = key.substring(versionKeyPrefix.length());
+          if (ALL_VERSION_SUFFIX.equals(name) || name.startsWith(GROUP_VERSION_PREFIX)) {
+            continue;
+          }
+          names.add(name);
         }
       }
       return Optional.of(names);
+    });
+    return result != null ? result : Optional.empty();
+  }
+
+  /**
+   * 获取所有活跃的 group 名称.
+   *
+   * @return Optional.empty() 表示扫描能力暂不可用；Optional.of(groups) 表示扫描成功，groups 可能为空集
+   */
+  public Optional<Set<String>> getActiveGroups() {
+    String pattern = versionKeyPrefix + GROUP_VERSION_PREFIX + "*";
+    Optional<Set<String>> result = stringRedisTemplate.execute(
+        (RedisCallback<Optional<Set<String>>>) connection -> {
+        Set<String> groups = new java.util.HashSet<>();
+        ScanOptions options = ScanOptions.scanOptions().match(pattern).count(100).build();
+        var keyCommands = connection.keyCommands();
+        if (keyCommands == null) {
+          LOG.warn("Redis key commands are not available, skipping group scan");
+          return Optional.empty();
+        }
+        try (var cursor = keyCommands.scan(options)) {
+          while (cursor.hasNext()) {
+            String key = new String(cursor.next(), java.nio.charset.StandardCharsets.UTF_8);
+            String groupName = key.substring(
+                (versionKeyPrefix + GROUP_VERSION_PREFIX).length());
+            groups.add(groupName);
+          }
+        }
+        return Optional.of(groups);
     });
     return result != null ? result : Optional.empty();
   }

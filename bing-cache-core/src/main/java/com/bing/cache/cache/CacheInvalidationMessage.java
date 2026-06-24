@@ -18,6 +18,7 @@ package com.bing.cache.cache;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
@@ -32,7 +33,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class CacheInvalidationMessage {
 
-  private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+  private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper()
+      .enable(DeserializationFeature.READ_UNKNOWN_ENUM_VALUES_AS_NULL);
 
   /**
    * 失效消息类型.
@@ -51,6 +53,8 @@ public class CacheInvalidationMessage {
   private Type type;
 
   private String key;
+
+  private String group;
 
   private long timestamp;
 
@@ -111,8 +115,10 @@ public class CacheInvalidationMessage {
    * @return 按分组清除消息
    */
   public static CacheInvalidationMessage clearGroup(String group, String instanceId) {
-    return new CacheInvalidationMessage(Type.CLEAR_GROUP, group, System.currentTimeMillis(),
-        instanceId);
+    CacheInvalidationMessage msg = new CacheInvalidationMessage(Type.CLEAR_GROUP, null,
+        System.currentTimeMillis(), instanceId);
+    msg.group = group;
+    return msg;
   }
 
   /**
@@ -148,6 +154,14 @@ public class CacheInvalidationMessage {
 
   public String getKey() {
     return key;
+  }
+
+  public String getGroup() {
+    return group;
+  }
+
+  public void setGroup(String group) {
+    this.group = group;
   }
 
   public long getTimestamp() {
