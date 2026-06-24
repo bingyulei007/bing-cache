@@ -116,11 +116,24 @@ public @interface BingCache {
    *   <li>{@code #root.target} — 目标对象</li>
    * </ul>
    *
+   * <p><b>单值与多值：</b></p>
+   * <ul>
+   *   <li>单值表达式：如 {@code #user.id}、{@code #userId + ':' + #type}、
+   *       {@code T(Collections).singletonList(#a)}、{@code {#list}}。
+   *       单值输出 {@code Sg[...]}，其中 {@code Sg} 表示 single。</li>
+   *   <li>多值表达式：使用 SpEL 列表字面量 {@code {expr1, expr2, ...}}，顶层逗号分隔，
+   *       嵌套括号/数组/字符串里的逗号被忽略。输出 {@code [...]}，与
+   *       {@code argIndexes} / 默认多参数的格式一致。</li>
+   * </ul>
+   *
    * <p>注意：不支持 {@code #root.targetClass}、{@code #caches} 等 Spring Cache 特有变量。</p>
    *
-   * <p>示例：{@code argSpel = "#user.id"} 生成形如 {@code cacheName(Sg[N:1])} 的 key
-   *（单值选取输出 {@code Sg[...]}，多值选取输出 {@code [...]}，
-   * 详细规则见 {@code CacheKeyGenerator}）。</p>
+   * <p>示例：</p>
+   * <ul>
+   *   <li>{@code argSpel = "#user.id"} → 单值，key 形如 {@code cacheName(Sg[N:1])}</li>
+   *   <li>{@code argSpel = "{#a, #b}"} → 多值，key 形如 {@code cacheName([N:1, N:2])}</li>
+   *   <li>{@code argSpel = "{#list}"} → 单值（去壳），key 形如 {@code cacheName(Sg[[N:1, N:2]])}</li>
+   * </ul>
    *
    * <p>求值结果为 null 时序列化为 {@code "null"}，自定义对象使用 Jackson 序列化。</p>
    *

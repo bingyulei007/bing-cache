@@ -653,6 +653,77 @@ class CacheKeyGeneratorTest {
     assertTrue(keyFromMulti.contains("([") && !keyFromMulti.contains("Sg["));
   }
 
+  /**
+   * 测试多值 SpEL 表达式允许首尾及参数间存在空格.
+   *
+   * <p>只要满足 "{" 开头 "}" 结尾、每个参数以 "#" 开头、参数用 "," 分隔，
+   * 多余的空格不影响多值判定。</p>
+   */
+  @Test
+  void testSpelMultiValueIgnoresWhitespace() throws NoSuchMethodException {
+    Method method = TestService.class.getMethod("multiArg", String.class, Integer.class,
+        Long.class);
+    Object[] args = {"a", 2, 3L};
+
+    String key = generator.generate(method, args, null, "", "cache", "",
+        new int[]{}, "{ #root.args[0] , #root.args[1] , #root.args[2] }");
+
+    assertEquals("cache([S:a, N:2, N:3])", key);
+  }
+
+  /**
+   * 测试顶层逗号与嵌套逗号的区分：字符串字面量/数组构造器里的逗号不影响顶层切分.
+   *
+   * <p>{@code {#root.args[0], 'x'}} 顶层有两个表达式，因此走多值路径，
+   * 输出 {@code [S:a, S:x]}。</p>
+   */
+  @Test
+  void testSpelMixedLiteralTreatedAsMultiValue() throws NoSuchMethodException {
+    Method method = TestService.class.getMethod("multiArg", String.class, Integer.class,
+        Long.class);
+    Object[] args = {"a", 2, 3L};
+
+    String key = generator.generate(method, args, null, "", "cache", "",
+        new int[]{}, "{#root.args[0], 'x'}");
+
+    assertEquals("cache([S:a, S:x])", key);
+  }
+
+  /**
+   * 测试数组构造器中的逗号被忽略，顶层只按两个元素参与多值切分.
+   *
+   * <p>{@code {new int[]{#a, #b}, #c}} 顶层有两个表达式：数组构造器和 {@code #c}，
+   * 因此走多值路径，输出 {@code [[N:1, N:2], N:3]}（数组本身作为一个参数）。</p>
+   */
+  @Test
+  void testSpelNestedArrayLiteralAsMultiValue() throws NoSuchMethodException {
+    Method method = TestService.class.getMethod("threeInts", int.class, int.class, int.class);
+    Object[] args = {1, 2, 3};
+
+    String key = generator.generate(method, args, null, "", "cache", "",
+        new int[]{}, "{new int[]{#a, #b}, #c}");
+
+    assertEquals("cache([[N:1, N:2], N:3])", key);
+  }
+
+  /**
+   * 测试花括号内只有一个参数时按单值处理.
+   *
+   * <p>{@code {#a0}} 虽然以 "{}" 包裹，但只有一个参数，
+   * 不满足多值“至少两个参数”的要求，因此输出 {@code Sg[...]}。</p>
+   */
+  @Test
+  void testSpelSingleParamInBracesTreatedAsSingleValue() throws NoSuchMethodException {
+    Method method = TestService.class.getMethod("findByInts", int[].class);
+    int[] ints = {1, 2};
+    Object[] args = {ints};
+
+    String key = generator.generate(method, args, null, "", "cache", "",
+        new int[]{}, "{#a0}");
+
+    assertEquals("cache(Sg[[N:1, N:2]])", key);
+  }
+
   // ==================== 保留名校验测试 ====================
 
   @Test
@@ -742,6 +813,10 @@ class CacheKeyGeneratorTest {
     }
 
     public String multiArg(String a, Integer b, Long c) {
+      return "result";
+    }
+
+    public String threeInts(int a, int b, int c) {
       return "result";
     }
 

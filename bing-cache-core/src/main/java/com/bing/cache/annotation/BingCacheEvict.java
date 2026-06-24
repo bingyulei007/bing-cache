@@ -99,7 +99,9 @@ public @interface BingCacheEvict {
    * SpEL 表达式，用于从方法参数中选取值参与 key 生成.
    *
    * <p>非空时优先于 {@link #argIndexes()}，表达式求值结果作为 key 的参数部分。
-   * 应与对应的 {@link BingCache#argSpel()} 保持一致，确保 evict 能匹配到缓存 key。</p>
+   * 应与对应的 {@link BingCache#argSpel()} 保持一致，确保 evict 能匹配到缓存 key。
+   * 若 {@link BingCache} 使用了多值列表字面量（如 {@code {#a, #b}}），
+   * 则 {@code @BingCacheEvict} 也必须使用完全相同的表达式才能匹配。</p>
    *
    * <p>表达式中可用的变量与 {@link BingCache#argSpel()} 相同（类似 Spring
    * {@code @Cacheable} 的参数变量），包括 {@code #参数名}、{@code #p0} / {@code #a0}、

@@ -153,6 +153,16 @@ public class DictService {
 
 > 注意：不支持 `#root.targetClass`、`#caches` 等 Spring Cache 特有变量。
 
+**单值与多值**：
+
+- **单值**：普通表达式、拼接表达式或单元素花括号表达式，输出 `Sg[...]`。
+  - `#user.id` → `Sg[N:1]`
+  - `#userId + ':' + #type` → `Sg[S:1:normal]`
+  - `{#list}` → 去壳为 `#list`，等价于单值 → `Sg[[N:1, N:2]]`
+- **多值**：使用 SpEL 列表字面量 `{expr1, expr2, ...}`，顶层逗号分隔，嵌套 `()`/`[]`/`{}` 和字符串里的逗号被忽略，输出 `[...]`。
+  - `{#a, #b}` → `[N:1, N:2]`
+  - `{new int[]{#a, #b}, #c}` → `[[N:1, N:2], N:3]`（两个顶层参数，数组内逗号不影响切分）
+
 SpEL 表达式求值结果通过 Jackson 序列化为字符串（非基本类型时），null 结果序列化为 `"null"`。
 
 最终 key 格式为 `前缀(spelResult)`，前缀仍由 `cacheName` / `keyPrefix` 决定。
@@ -230,6 +240,11 @@ public UserVO getUserById(Long id) { ... }
 @BingCache(cacheName = "user", argSpel = "#user.getName().toLowerCase()")
 public UserVO getUser(UserVO user) { ... }
 // key: user(Sg[S:alice])
+
+// 多值选取：方法前两个参数都参与 key 生成
+@BingCache(cacheName = "order", argSpel = "{#userId, #type}")
+public Order getOrder(Long userId, String type) { ... }
+// key: order([N:1, S:normal])
 ```
 
 ### @BingCacheEvict — 缓存清除
@@ -460,8 +475,10 @@ public class UserService {
 > - 单值场景：`argSpel="#id"`、`argIndexes={0}`、单参数默认，都输出 `prefix(Sg[N:1])`
 > - 多值场景：`argSpel="{#a,#b}"`、`argIndexes={0,1}`、多参数默认，都输出 `prefix([N:1,N:2])`
 >
-> **argSpel 多值语法约定**：以 `{` 开头且以 `}` 结尾的 argSpel 视为多值选取（SpEL 列表字面量），
-> 如 `{#a, #b}`。不要在单值 argSpel 表达式中嵌入 `}` 字符，否则会被误判为多值。
+> **argSpel 多值语法约定**：使用 SpEL 列表字面量 `{expr1, expr2, ...}` 表示多值选取，
+> 顶层逗号才作为参数分隔，嵌套 `()`/`[]`/`{}` 和字符串字面量中的逗号被忽略，
+> 如 `{#a, #b}`、`{new int[]{#a, #b}, #c}`。
+> 单元素花括号（如 `{#list}`）会被去壳，按单值处理，输出 `Sg[...]`。
 >
 > 自定义对象使用 Jackson 序列化而非 `toString()`，确保不同实例和 JVM 重启后 key 一致。
 > Jackson 序列化失败时直接抛 `IllegalStateException`（而非降级为 `hashCode()`）。

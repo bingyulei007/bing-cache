@@ -22,6 +22,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.lang.reflect.Array;
 import java.lang.reflect.Method;
 import java.math.BigInteger;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
@@ -41,6 +42,15 @@ import org.springframework.util.StringUtils;
  * <ul>
  *   <li>SpEL 表达式（{@code keyExpression} 非空）：通过表达式从参数中选取值，如 {@code #user.id}</li>
  *   <li>参数索引（{@code argIndexes}）：按位置选取整个参数，SpEL 为空时使用</li>
+ * </ul>
+ *
+ * <p><b>单值与多值：</b></p>
+ * <ul>
+ *   <li>单值选取（1 个参数）输出 {@code Sg[...]}，如 {@code Sg[N:1]}、{@code Sg[S:abc]}；
+ *       单参数的花括号表达式（如 {@code {#list}}）会被去壳，等价于 {@code #list}</li>
+ *   <li>多值选取（>=2 个参数）输出 {@code [...]}，如 {@code [N:1, N:2]}；
+ *       使用 SpEL 列表字面量 {@code {expr1, expr2, ...}}，顶层逗号才作为分隔，
+ *       嵌套 {@code ()}/{@code []}/{@code {}} 和字符串字面量中的逗号被忽略</li>
  * </ul>
  *
  * <p>参数序列化使用 Jackson ObjectMapper，确保自定义对象的 key 生成
@@ -109,7 +119,9 @@ public class CacheKeyGenerator {
    *
    * <p>参数部分生成方式：</p>
    * <ul>
-   *   <li>{@code keyExpression} 非空：使用 SpEL 表达式求值，结果序列化为参数部分</li>
+   *   <li>{@code keyExpression} 非空：使用 SpEL 表达式求值，结果序列化为参数部分。
+   *       表达式以 {@code {}} 包裹时按 SpEL 列表字面量处理：顶层有两个及以上表达式时走多值，
+   *       输出 {@code [...]}；只有一个表达式时去壳按单值处理，输出 {@code Sg[...]}。</li>
    *   <li>{@code keyExpression} 为空：使用 argIndexes 选取参数并序列化</li>
    * </ul>
    *
@@ -157,16 +169,23 @@ public class CacheKeyGenerator {
 
     String argsStr;
     if (StringUtils.hasText(keyExpression)) {
-      // argSpel:按表达式形式判断单值/多值
-      // 约定:以 { 开头且以 } 结尾为多值选取(SpEL 列表字面量),元素用逗号分隔
-      String trimmed = keyExpression.trim();
-      if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
-        // 多值:SpEL 求值得 List → 逐元素序列化,输出 [N:1,N:2]
-        Object evaluated = evaluateKey(method, args, target, keyExpression);
+      // argSpel 按表达式形式判断单值/多值：
+      // 1. 首尾空格去除后，以 "{" 开头且以 "}" 结尾
+      // 2. 花括号内顶层按 "," 切分后至少有两个表达式 → 多值
+      // 3. 只有一个表达式 → 单值（去掉外层花括号后求值，避免多包一层 List）
+      // 切分时会跳过嵌套的 ()/[]/{} 以及字符串字面量里的逗号，与 SpEL 列表字面量语义一致
+      String keyExpressionTrimmed = keyExpression.trim();
+      if (isMultiValueKeyExpression(keyExpressionTrimmed)) {
+        Object evaluated = evaluateKey(method, args, target, keyExpressionTrimmed);
         argsStr = serializeMultiValue(evaluated);
+      } else if (isSingleBracedKeyExpression(keyExpressionTrimmed)) {
+        // 单参数花括号（如 {#list}）：去掉外层花括号，按单值求值，避免 SpEL 列表字面量多包一层
+        String innerExpression = keyExpressionTrimmed.substring(1,
+            keyExpressionTrimmed.length() - 1).trim();
+        Object evaluated = evaluateKey(method, args, target, innerExpression);
+        argsStr = serializeSingle(evaluated);
       } else {
-        // 单值:SpEL 求值 → serializeSingle,输出 Sg[N:1]
-        Object evaluated = evaluateKey(method, args, target, keyExpression);
+        Object evaluated = evaluateKey(method, args, target, keyExpressionTrimmed);
         argsStr = serializeSingle(evaluated);
       }
     } else {
@@ -201,6 +220,135 @@ public class CacheKeyGenerator {
       throw new IllegalStateException(
           "Failed to evaluate SpEL key expression: " + keyExpression, e);
     }
+  }
+
+  /**
+   * 按顶层分隔符切分字符串，忽略嵌套括号/方括号/花括号以及字符串字面量内的分隔符.
+   *
+   * <p>用于解析 SpEL 列表字面量 {@code {expr1, expr2, ...}}：逗号只有在
+   * 不处于任何 {@code ()}、{@code []}、{@code {}} 嵌套结构内，且不在字符串
+   * 中时，才作为顶层分隔符。</p>
+   *
+   * @param content  要去掉外层花括号后的内容
+   * @param delimiter 顶层分隔符
+   * @return 切分后的顶层表达式数组
+   */
+  private static String[] splitTopLevel(String content, char delimiter) {
+    List<String> parts = new ArrayList<>();
+    StringBuilder current = new StringBuilder();
+    int depth = 0;
+    boolean inString = false;
+    char quoteChar = 0;
+    boolean escape = false;
+
+    for (int i = 0; i < content.length(); i++) {
+      char c = content.charAt(i);
+      if (inString) {
+        current.append(c);
+        if (escape) {
+          escape = false;
+        } else if (c == '\\') {
+          escape = true;
+        } else if (c == quoteChar) {
+          inString = false;
+        }
+        continue;
+      }
+      if (c == '\'' || c == '"') {
+        inString = true;
+        quoteChar = c;
+        current.append(c);
+        continue;
+      }
+      if (c == '(' || c == '[' || c == '{') {
+        depth++;
+        current.append(c);
+      } else if (c == ')' || c == ']' || c == '}') {
+        depth--;
+        current.append(c);
+      } else if (c == delimiter && depth == 0) {
+        parts.add(current.toString());
+        current.setLength(0);
+      } else {
+        current.append(c);
+      }
+    }
+    parts.add(current.toString());
+    return parts.toArray(new String[0]);
+  }
+
+  /**
+   * 统计顶层表达式数组中非空片段的个数.
+   */
+  private static int countNonEmpty(String[] parts) {
+    int count = 0;
+    for (String part : parts) {
+      if (!part.trim().isEmpty()) {
+        count++;
+      }
+    }
+    return count;
+  }
+
+  /**
+   * 判断 SpEL 表达式是否表示多值选取.
+   *
+   * <p>多值约定：首尾空格去除后，以 "{" 开头且以 "}" 结尾，并且顶层按
+   * "," 切分后至少包含两个非空表达式。切分时会跳过嵌套
+   * {@code ()}/{@code []}/{@code {}} 以及字符串字面量里的逗号，
+   * 因此 {@code {new int[]{#a, #b}, #c}} 会被正确识别为两个元素。</p>
+   *
+   * <p>单参数场景（如 {@code {#list}}）不满足“至少两个表达式”条件，
+   * 因此按单值处理，输出 {@code Sg[...]}。</p>
+   *
+   * @param keyExpression 已 trim 的 SpEL 表达式
+   * @return true 表示多值选取
+   */
+  private static boolean isMultiValueKeyExpression(String keyExpression) {
+    if (keyExpression == null || keyExpression.isEmpty()) {
+      return false;
+    }
+    if (!keyExpression.startsWith("{") || !keyExpression.endsWith("}")) {
+      return false;
+    }
+    String content = keyExpression.substring(1, keyExpression.length() - 1);
+    String trimmedContent = content.trim();
+    if (trimmedContent.isEmpty()) {
+      return false;
+    }
+    String[] parts = splitTopLevel(content, ',');
+    return countNonEmpty(parts) >= 2;
+  }
+
+  /**
+   * 判断 SpEL 表达式是否为单参数花括号形式（如 {@code {#list}}）.
+   *
+   * <p>满足以下条件的表达式按单值处理，并去掉外层花括号后直接求值：</p>
+   * <ul>
+   *   <li>首尾空格去除后，以 "{" 开头且以 "}" 结尾</li>
+   *   <li>花括号内顶层按 "," 切分后只有一个非空表达式</li>
+   * </ul>
+   *
+   * <p>例如 {@code {#list}} 等价于 {@code #list}，输出 {@code Sg[[...]]}；
+   * 而 {@code {#a, #b}} 因顶层有两个表达式，走多值路径输出 {@code [...]}。</p>
+   *
+   * @param keyExpression 已 trim 的 SpEL 表达式
+   * @return true 表示单参数花括号
+   */
+  private static boolean isSingleBracedKeyExpression(String keyExpression) {
+    if (keyExpression == null || keyExpression.isEmpty()) {
+      return false;
+    }
+    if (!keyExpression.startsWith("{") || !keyExpression.endsWith("}")) {
+      return false;
+    }
+    String content = keyExpression.substring(1, keyExpression.length() - 1);
+    String trimmedContent = content.trim();
+    if (trimmedContent.isEmpty()) {
+      return false;
+    }
+    String[] parts = splitTopLevel(content, ',');
+    return countNonEmpty(parts) == 1;
   }
 
   /**
@@ -338,7 +486,10 @@ public class CacheKeyGenerator {
    * <p>SpEL 列表字面量 {@code {#a, #b}} 求值后返回 {@code List}，
    * 逐元素序列化为 {@code [N:1, N:2]} 形式，与 argIndexes/默认多参数产出一致。</p>
    *
-   * @param evaluated SpEL 求值结果（预期为 List）
+   * <p>求值结果不是 {@code List} 时（例如用户写了 {@code {#obj}} 单参数形式），
+   * 统一回退为 {@link #serializeSingle}，保证被视为“一个参数”。</p>
+   *
+   * @param evaluated SpEL 多值求值结果（预期为 List）
    * @return 序列化后的字符串
    */
   private static String serializeMultiValue(Object evaluated) {
@@ -353,8 +504,8 @@ public class CacheKeyGenerator {
           .map(CacheKeyGenerator::serializeElement)
           .collect(Collectors.joining(", ", "[", "]"));
     }
-    // 罕见情况：{...} 形式但 SpEL 求值结果非 List（如 SpEL 语法异常）
-    // 降级为单值序列化，保证不抛异常
+    // 非 List 的求值结果（如数组、Map 等）按单值处理：
+    // 只要没有使用 {...} 多值语法，就视为一个参数，统一包装为 Sg[...]。
     return serializeSingle(evaluated);
   }
 
@@ -367,7 +518,7 @@ public class CacheKeyGenerator {
    * <p>内部按类型序列化：</p>
    * <ul>
    *   <li>基本类型：{@code Sg[N:1]}、{@code Sg[S:abc]} 等</li>
-   *   <li>List/数组：{@code Sg[N:1, N:2, N:3]}（逐元素加类型前缀）</li>
+   *   <li>List/数组：{@code Sg[[N:1, N:2, N:3]]}（逐元素加类型前缀）</li>
    *   <li>自定义对象：{@code Sg[{"id":1}]}</li>
    *   <li>null：{@code Sg[null]}</li>
    * </ul>
