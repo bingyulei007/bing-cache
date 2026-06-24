@@ -438,9 +438,12 @@ public class UserService {
 |----------|-----------|------|
 | null | 字符串 `"null"` | `user([null])` |
 | 整数数值 / Boolean / Character / String | 类型前缀 + 值 | `user([N:42])`、`user([B:true])`、`user([S:42])` |
-| 数组 | 递归序列化元素 | `user([A:[N:1, N:2, N:3]])` |
+| 数组 / List | 递归序列化元素 | `user([[N:1, N:2, N:3]])` |
 | 自定义对象 | Jackson JSON 序列化 | `user([{"id":1,"name":"Alice"}])` |
 
+> **数组与 List 在 key 中形式相同**：两者都输出 `[N:1, N:2, N:3]` 形式，业务语义等价。
+> 例如 `Long[] {1,2,3}` 与 `List<Long> [1,2,3]` 会命中同一 key，无需区分。
+>
 > 自定义对象使用 Jackson 序列化而非 `toString()`，确保不同实例和 JVM 重启后 key 一致。
 > Jackson 序列化失败时直接抛 `IllegalStateException`（而非降级为 `hashCode()`）。
 

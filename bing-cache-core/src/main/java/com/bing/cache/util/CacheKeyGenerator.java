@@ -360,12 +360,15 @@ public class CacheKeyGenerator {
   /**
    * 递归序列化数组元素，避免数组内部的字符串值和数值发生 key 碰撞.
    *
+   * <p>输出形式为 {@code [N:1, N:2, N:3]}，与 List 的序列化形式一致
+   *（业务语义等价，数组和 List 在 key 中不区分）。</p>
+   *
    * @param array 数组参数，可为对象数组或基本类型数组
    * @return 序列化后的数组字符串
    */
   private static String serializeArray(Object array) {
     int length = Array.getLength(array);
-    StringBuilder sb = new StringBuilder("A:[");
+    StringBuilder sb = new StringBuilder("[");
     for (int i = 0; i < length; i++) {
       if (i > 0) {
         sb.append(", ");

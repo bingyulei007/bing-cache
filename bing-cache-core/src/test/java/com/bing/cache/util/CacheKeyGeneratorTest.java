@@ -260,6 +260,8 @@ class CacheKeyGeneratorTest {
 
   /**
    * 测试基本类型数组参数不抛 ClassCastException.
+   *
+   * <p>数组输出形式为 {@code [N:1, N:2, N:3]}（无 A: 前缀），与 List 一致。</p>
    */
   @Test
   void testPrimitiveArrayArg() throws NoSuchMethodException {
@@ -269,7 +271,7 @@ class CacheKeyGeneratorTest {
 
     String key = generator.generate(method, args, null, "", "", "", new int[]{}, "");
 
-    assertTrue(key.contains("[A:[N:1, N:2, N:3]]"));
+    assertTrue(key.contains("[[N:1, N:2, N:3]]"));
   }
 
   /**
