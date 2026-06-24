@@ -103,6 +103,7 @@ public class DictService {
 
 | 属性 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
+| `group` | String | `""` | 缓存分组，用于将多个 cacheName 归类到同一命名空间，支持按 group 批量清除（`@BingCacheEvict(group=..., allEntries=true)`）。设置后 key 格式为 `group:cacheName(args)` |
 | `cacheName` | String | `""` | 缓存名称，用于与 `@BingCacheEvict` 共享同一前缀，优先级最高 |
 | `keyPrefix` | String | `""` | 缓存 key 前缀，为空时使用"类全限定名.方法名(参数类型签名)"；`cacheName` 不为空时忽略 |
 | `expireTime` | int | `0` | 过期时间（秒），`0` 表示不过期 |
@@ -126,6 +127,16 @@ public class DictService {
 - **只需要缓存、不需要清除** → 用 `keyPrefix` 缩短前缀，或不设置用默认前缀
 
 > 注意：`cacheName` 和 `keyPrefix` 同时设置时，只有 `cacheName` 生效。
+
+#### cacheName 命名约束
+
+**不推荐 `cacheName` 含冒号（`:`）**，建议使用单词或驼峰命名（如 `userDetail`、`userList`）。
+
+原因：`@BingCache` / `@BingCacheEvict` 的 `group` 分组属性使用冒号作为 group 与 cacheName 的层级分隔符，缓存 key 格式为 `group:cacheName(args)`。若 `cacheName` 本身含冒号（如 `cacheName = "user:detail"`），其 key 前缀会与 `group = "user"` + `cacheName = "detail"` 产生的前缀完全相同。此时执行 `@BingCacheEvict(group = "user", allEntries = true)` 触发的 `clearByGroup("user")` 会按 `user:` 前缀匹配清除，**误清那些并未声明属于 `user` 组、只是 cacheName 恰好含冒号的缓存**。
+
+`keyPrefix` 含冒号存在同样的碰撞风险，使用 group 时同样应避免。
+
+若需要"分组"语义，使用 `group` 属性而非在 `cacheName` 中拼接冒号。
 
 #### argSpel SpEL 表达式
 
@@ -185,7 +196,7 @@ public List<DictVO> getDictList(String dictType) { ... }
 // key: dict([S:sys_config])
 
 // 不过期的静态数据，只需缓存，不需要清除
-@BingCache(keyPrefix = "config:sys")
+@BingCache(keyPrefix = "configSys")
 public SystemConfigVO getSystemConfig() { ... }
 
 // ========== 其他用法 ==========
@@ -227,11 +238,12 @@ public UserVO getUser(UserVO user) { ... }
 
 | 属性 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
+| `group` | String | `""` | 缓存分组，需与 `@BingCache` 的 `group` 一致才能匹配。`allEntries=true` 且仅设置 `group`（无 cacheName/keyPrefix）时，清除整个 group 下的缓存 |
 | `cacheName` | String | `""` | 缓存名称，需与 `@BingCache` 的 `cacheName` 一致才能匹配 |
 | `keyPrefix` | String | `""` | 缓存 key 前缀，同 `@BingCache`；`cacheName` 不为空时忽略 |
 | `argIndexes` | int[] | `{}` | 参与 key 生成的参数索引，需与 `@BingCache` 的 `argIndexes` 对应；`argSpel` 非空时忽略 |
 | `argSpel` | String | `""` | SpEL 表达式，需与 `@BingCache` 的 `argSpel` 一致才能匹配；非空时优先于 `argIndexes`；`allEntries=true` 时不生效 |
-| `allEntries` | boolean | `false` | `true` 时清除所有缓存：有 cacheName/keyPrefix 时只清除该前缀下的缓存；都没有时清空全部缓存 |
+| `allEntries` | boolean | `false` | `true` 时清除所有缓存：仅 `group` 时清整个 group；有 `cacheName`/`keyPrefix` 时清该前缀；都没有时清空全部 |
 | `beforeInvocation` | boolean | `false` | `true` 时在方法执行前清除缓存；默认方法成功后才清除 |
 
 > **cacheName 与 keyPrefix 选择原则同 `@BingCache`**：推荐用 `cacheName` 配对，语义更明确。`cacheName` 不为空时 `keyPrefix` 被忽略。
@@ -240,19 +252,19 @@ public UserVO getUser(UserVO user) { ... }
 
 ```java
 // 更新后清除指定缓存（cacheName 与 @BingCache 对应）
-@BingCacheEvict(cacheName = "user:detail")
+@BingCacheEvict(cacheName = "userDetail")
 public void updateUser(Long id, UserVO vo) { ... }
 
 // 删除后清除指定缓存（只取 id 生成 key，与查询方法的 key 匹配）
-@BingCacheEvict(cacheName = "user:detail", argIndexes = {0})
+@BingCacheEvict(cacheName = "userDetail", argIndexes = {0})
 public void deleteUser(Long id) { ... }
 
 // 方法执行前清除缓存（即使方法抛异常，缓存也会被清除）
-@BingCacheEvict(cacheName = "user:detail", beforeInvocation = true)
+@BingCacheEvict(cacheName = "userDetail", beforeInvocation = true)
 public void forceUpdateUser(Long id, UserVO vo) { ... }
 
 // 清空指定 cacheName 下的所有缓存
-@BingCacheEvict(cacheName = "user:detail", allEntries = true)
+@BingCacheEvict(cacheName = "userDetail", allEntries = true)
 public void refreshAllUsers() { ... }
 
 // 清空全部缓存（不指定 cacheName/keyPrefix）
@@ -306,7 +318,51 @@ public class UserService {
 
 #### 多缓存协同失效
 
-当一个写操作影响多个缓存时，需要多个 `@BingCacheEvict` 协同清除：
+当一个写操作影响多个缓存时，有两种方式协同清除：
+
+**方式一：使用 `group` 分组（推荐）**
+
+将相关缓存归入同一 group，写操作只需一个 `@BingCacheEvict(group=..., allEntries=true)` 即可清除整个 group，无需逐个声明：
+
+```java
+@Service
+public class UserService {
+
+  // 用户详情 — 缓存到 user 组的 detail
+  @BingCache(group = "user", cacheName = "detail", expireTime = 300)
+  public UserVO getUserDetail(Long id) { ... }
+  // key: user:detail([N:1])
+
+  // 用户列表 — 缓存到 user 组的 list
+  @BingCache(group = "user", cacheName = "list", argIndexes = {0, 1}, expireTime = 120)
+  public List<UserVO> queryUsers(String category, int page) { ... }
+  // key: user:list([S:admin, N:1])
+
+  // 用户统计 — 缓存到 user 组的 stats
+  @BingCache(group = "user", cacheName = "stats", expireTime = 600)
+  public UserStatsVO getUserStats() { ... }
+  // key: user:stats()
+
+  // 更新用户 — 一个注解清除 user 组下所有缓存
+  @BingCacheEvict(group = "user", allEntries = true)
+  public void updateUser(Long id, UserVO vo) { ... }
+
+  // 新增订单到用户 — 只清 user 组的 orders 缓存
+  @BingCache(group = "user", cacheName = "orders", expireTime = 120)
+  public List<OrderVO> getUserOrders(Long userId) { ... }
+
+  @BingCacheEvict(group = "user", cacheName = "orders", argIndexes = {0})
+  public void createOrder(Long userId, String orderId) { ... }
+
+  // 刷新统计 — 只清 user 组的 stats
+  @BingCacheEvict(group = "user", cacheName = "stats", allEntries = true)
+  public void refreshUserStats() { ... }
+}
+```
+
+**方式二：使用多个 `@BingCacheEvict`（不使用 group）**
+
+未使用 group 时，需要逐个声明要清除的 cacheName：
 
 ```java
 @Service
@@ -339,7 +395,20 @@ public class UserService {
 }
 ```
 
-> **设计原则**：不同 cacheName 代表独立的缓存空间。更新数据时，根据业务影响范围显式声明需要清除哪些缓存——既不会遗漏（该清的没清），也不会误伤（不该清的清了）。
+> **设计原则**：`group` 适合"一个写操作需清除多个相关 cacheName"的场景，用一个注解替代 N 个 `@BingCacheEvict`；不使用 group 时，不同 cacheName 代表独立缓存空间，需显式声明要清除哪些。两种方式都遵循"既不遗漏也不误伤"的原则——`group` 通过命名空间隔离实现，多注解通过显式列举实现。
+
+#### group 清除层级
+
+`group` 提供三层清除粒度：
+
+| 场景 | 注解 | 行为 |
+|------|------|------|
+| 清除单个缓存 | `@BingCacheEvict(group="user", cacheName="detail", argIndexes={0})` | 清除 `user:detail([N:1])` |
+| 清除 cacheName 下所有缓存 | `@BingCacheEvict(group="user", cacheName="list", allEntries=true)` | 清除 `user:list(` 开头的所有 key |
+| 清除整个 group | `@BingCacheEvict(group="user", allEntries=true)` | 清除 `user:` 开头的所有 key（1 次 SCAN + 1 次 Pub/Sub） |
+| 清空全部缓存 | `@BingCacheEvict(allEntries=true)` | 清空全部缓存 |
+
+> **`group` 单独使用限制**：`group` 不能单独用于非 `allEntries` 场景（即 `@BingCacheEvict(group="user")` 不带 `allEntries=true` 也不带 `cacheName`/`keyPrefix` 会抛 `IllegalStateException`），因为没有 `cacheName`/`keyPrefix` 无法生成合法的 key 前缀。
 
 ## 缓存 Key 生成规则
 
@@ -348,8 +417,10 @@ public class UserService {
 ### 前缀优先级
 
 1. **`cacheName`**（最高）— 如 `user`
-2. **`keyPrefix`** — 如 `user:detail`
+2. **`keyPrefix`** — 如 `userDetail`
 3. **默认** — 类全限定名.方法名(参数类型签名)，如 `com.example.UserService.getUserById(java.lang.Long)`
+
+> **`group` 是可选的最外层前缀**：设置 `group` 时，key 格式为 `group:prefix(args)`（如 `user:detail([N:1])`）。`group` 不影响上述优先级，仅作为命名空间前缀拼接在最终 prefix 之前。
 
 ### 参数选取方式
 
