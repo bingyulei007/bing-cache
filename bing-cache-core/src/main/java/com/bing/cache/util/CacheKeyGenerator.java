@@ -87,6 +87,7 @@ public class CacheKeyGenerator {
    *   <li>{@code keyExpression} 为空：使用 argIndexes 选取参数并序列化</li>
    * </ul>
    *
+   * @param group         缓存分组名称，可为空；非空时作为 key 最外层前缀
    * @param method        目标方法
    * @param args          方法参数
    * @param target        目标对象（SpEL {@code #root.target} 使用）
@@ -97,7 +98,8 @@ public class CacheKeyGenerator {
    * @return 缓存 key
    */
   public String generate(Method method, Object[] args, Object target,
-      String cacheName, String keyPrefix, int[] argIndexes, String keyExpression) {
+      String group, String cacheName, String keyPrefix,
+      int[] argIndexes, String keyExpression) {
     String className = method.getDeclaringClass().getName();
     String methodName = method.getName();
     String prefix;
@@ -113,6 +115,16 @@ public class CacheKeyGenerator {
           .map(Class::getName)
           .collect(Collectors.joining(","));
       prefix = className + "." + methodName + "(" + paramTypes + ")";
+    }
+
+    // group 作为最外层前缀拼接，并在非 allEntries 场景校验 group 不能单独使用
+    if (group != null && !group.isEmpty()) {
+      if (!StringUtils.hasText(cacheName) && !StringUtils.hasText(keyPrefix)) {
+        throw new IllegalStateException(
+            "@BingCache/@BingCacheEvict group='" + group + "' requires cacheName or keyPrefix. "
+            + "group cannot be used alone without allEntries=true.");
+      }
+      prefix = group + ":" + prefix;
     }
 
     String argsStr;
