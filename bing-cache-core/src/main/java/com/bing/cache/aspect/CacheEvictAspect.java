@@ -167,7 +167,7 @@ public class CacheEvictAspect {
     // allEntries=true 时不需要生成 key
     String key = bingCacheEvict.allEntries() ? null
         : cacheKeyGenerator.generate(method, args, target,
-            bingCacheEvict.cacheName(), bingCacheEvict.keyPrefix(),
+            bingCacheEvict.group(), bingCacheEvict.cacheName(), bingCacheEvict.keyPrefix(),
             bingCacheEvict.argIndexes(), bingCacheEvict.argSpel());
     doEvict(bingCacheEvict, key);
   }
@@ -233,20 +233,30 @@ public class CacheEvictAspect {
    *
    * <p>当 {@code allEntries = true} 时：
    * <ul>
-   *   <li>有 cacheName/keyPrefix → 按前缀清除（{@code clearByPrefix}）</li>
+   *   <li>group + cacheName/keyPrefix → 按前缀清除（{@code clearByPrefix}）</li>
+   *   <li>仅 group（无 cacheName/keyPrefix）→ 按组清除（{@code clearByGroup}）</li>
    *   <li>都没有 → 全局清空（{@code clear}）</li>
    * </ul>
    *
    * @param bingCacheEvict 缓存清除注解
-   * @param key            缓存 key（allEntries 且有前缀时忽略）
+   * @param key            缓存 key（allEntries 时忽略）
    */
   private void doEvict(BingCacheEvict bingCacheEvict, String key) {
     if (bingCacheEvict.allEntries()) {
+      String group = bingCacheEvict.group();
+      boolean hasGroup = group != null && !group.isEmpty();
       String prefix = resolvePrefix(bingCacheEvict);
-      if (prefix != null && !prefix.isEmpty()) {
+
+      if (hasGroup && prefix == null) {
+        // allEntries=true + 仅 group（无 cacheName/keyPrefix）→ clearByGroup
+        cacheManager.clearByGroup(group);
+        LOG.debug("Cache clear by group: {}", group);
+      } else if (prefix != null && !prefix.isEmpty()) {
+        // allEntries=true + cacheName/keyPrefix（可能带 group 前缀）→ clearByPrefix
         cacheManager.clearByPrefix(prefix);
         LOG.debug("Cache clear by prefix: {}", prefix);
       } else {
+        // 全空 → 全局清空
         cacheManager.clear();
         LOG.debug("Cache clear all entries");
       }
@@ -259,18 +269,31 @@ public class CacheEvictAspect {
   /**
    * 从注解中解析缓存前缀.
    *
-   * <p>优先级：cacheName > keyPrefix。都为空时返回 null。</p>
+   * <p>优先级：cacheName > keyPrefix。都为空时返回 null。
+   * 当 group 非空且有 basePrefix 时，返回 {@code group:basePrefix}。</p>
    *
    * @param bingCacheEvict 缓存清除注解
-   * @return 缓存前缀，都为空时返回 null
+   * @return 缓存前缀（含 group 拼接），都为空时返回 null
    */
   private String resolvePrefix(BingCacheEvict bingCacheEvict) {
-    if (bingCacheEvict.cacheName() != null && !bingCacheEvict.cacheName().isEmpty()) {
-      return bingCacheEvict.cacheName();
+    String group = bingCacheEvict.group();
+    String cacheName = bingCacheEvict.cacheName();
+    String keyPrefix = bingCacheEvict.keyPrefix();
+
+    // 优先 cacheName，其次 keyPrefix
+    String basePrefix;
+    if (cacheName != null && !cacheName.isEmpty()) {
+      basePrefix = cacheName;
+    } else if (keyPrefix != null && !keyPrefix.isEmpty()) {
+      basePrefix = keyPrefix;
+    } else {
+      basePrefix = null;
     }
-    if (bingCacheEvict.keyPrefix() != null && !bingCacheEvict.keyPrefix().isEmpty()) {
-      return bingCacheEvict.keyPrefix();
+
+    // group 作为最外层前缀拼接：group:basePrefix
+    if (group != null && !group.isEmpty() && basePrefix != null) {
+      return group + ":" + basePrefix;
     }
-    return null;
+    return basePrefix;
   }
 }
