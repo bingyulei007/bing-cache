@@ -724,6 +724,34 @@ class CacheKeyGeneratorTest {
     assertEquals("cache(Sg[[N:1, N:2]])", key);
   }
 
+  /**
+   * 测试空花括号 {} 按单值空列表处理，输出 Sg[].
+   */
+  @Test
+  void testSpelEmptyBracesProducesSingleEmpty() throws NoSuchMethodException {
+    Method method = TestService.class.getMethod("findById", Long.class);
+    Object[] args = {1L};
+
+    String key = generator.generate(method, args, null, "", "cache", "",
+        new int[]{}, "{}");
+
+    assertEquals("cache(Sg[])", key);
+  }
+
+  /**
+   * 测试空数组作为单参数时输出 Sg[].
+   */
+  @Test
+  void testEmptyArrayArgProducesSingleEmpty() throws NoSuchMethodException {
+    Method method = TestService.class.getMethod("findByInts", int[].class);
+    Object[] args = {new int[] {}};
+
+    String key = generator.generate(method, args, null, "", "cache", "",
+        new int[]{}, "");
+
+    assertEquals("cache(Sg[])", key);
+  }
+
   // ==================== 保留名校验测试 ====================
 
   @Test

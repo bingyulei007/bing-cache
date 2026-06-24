@@ -518,7 +518,7 @@ public class CacheKeyGenerator {
    * <p>内部按类型序列化：</p>
    * <ul>
    *   <li>基本类型：{@code Sg[N:1]}、{@code Sg[S:abc]} 等</li>
-   *   <li>List/数组：{@code Sg[[N:1, N:2, N:3]]}（逐元素加类型前缀）</li>
+   *   <li>List/数组：非空时 {@code Sg[[N:1, N:2, N:3]]}，空时 {@code Sg[]}（与多值空 {@code []} 区分）</li>
    *   <li>自定义对象：{@code Sg[{"id":1}]}</li>
    *   <li>null：{@code Sg[null]}</li>
    * </ul>
@@ -527,6 +527,12 @@ public class CacheKeyGenerator {
    * @return 序列化后的字符串
    */
   private static String serializeSingle(Object arg) {
+    if (arg instanceof List<?> list && list.isEmpty()) {
+      return "Sg[]";
+    }
+    if (arg != null && arg.getClass().isArray() && Array.getLength(arg) == 0) {
+      return "Sg[]";
+    }
     return "Sg[" + serializeElement(arg) + "]";
   }
 
