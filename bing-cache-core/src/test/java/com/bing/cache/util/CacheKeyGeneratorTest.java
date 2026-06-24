@@ -52,7 +52,7 @@ class CacheKeyGeneratorTest {
     Method method = TestService.class.getMethod("findById", Long.class);
     Object[] args = {1L};
 
-    String key = generator.generate(method, args, null, "", "", new int[]{}, "");
+    String key = generator.generate(method, args, null, "", "", "", new int[]{}, "");
 
     assertEquals(
         "com.bing.cache.util.CacheKeyGeneratorTest$TestService.findById(java.lang.Long)([N:1])",
@@ -67,7 +67,7 @@ class CacheKeyGeneratorTest {
     Method method = TestService.class.getMethod("findById", Long.class);
     Object[] args = {1L};
 
-    String key = generator.generate(method, args, null, "", "user:detail", new int[]{}, "");
+    String key = generator.generate(method, args, null, "", "", "user:detail", new int[]{}, "");
 
     assertEquals("user:detail([N:1])", key);
   }
@@ -80,7 +80,7 @@ class CacheKeyGeneratorTest {
     Method method = TestService.class.getMethod("findById", Long.class);
     Object[] args = {1L};
 
-    String key = generator.generate(method, args, null, "user", "user:detail", new int[]{}, "");
+    String key = generator.generate(method, args, null, "", "user", "user:detail", new int[]{}, "");
 
     assertEquals("user([N:1])", key);
   }
@@ -93,7 +93,7 @@ class CacheKeyGeneratorTest {
     Method method = TestService.class.getMethod("findById", Long.class);
     Object[] args = {1L};
 
-    String key = generator.generate(method, args, null, "user", "", new int[]{}, "");
+    String key = generator.generate(method, args, null, "", "user", "", new int[]{}, "");
 
     assertEquals("user([N:1])", key);
   }
@@ -106,7 +106,7 @@ class CacheKeyGeneratorTest {
     Method method = TestService.class.getMethod("findById", Long.class);
     Object[] args = {1L};
 
-    String key = generator.generate(method, args, null, "", "", new int[]{}, "");
+    String key = generator.generate(method, args, null, "", "", "", new int[]{}, "");
 
     assertEquals(
         "com.bing.cache.util.CacheKeyGeneratorTest$TestService.findById(java.lang.Long)([N:1])",
@@ -122,7 +122,7 @@ class CacheKeyGeneratorTest {
         Long.class);
     Object[] args = {"a", 2, 3L};
 
-    String key = generator.generate(method, args, null, "", "", new int[]{0, 2}, "");
+    String key = generator.generate(method, args, null, "", "", "", new int[]{0, 2}, "");
 
     assertEquals(
         "com.bing.cache.util.CacheKeyGeneratorTest$TestService.multiArg(java.lang.String,java.lang.Integer,java.lang.Long)([S:a, N:3])",
@@ -137,7 +137,7 @@ class CacheKeyGeneratorTest {
     Method method = TestService.class.getMethod("noArg");
     Object[] args = {};
 
-    String key = generator.generate(method, args, null, "", "", new int[]{}, "");
+    String key = generator.generate(method, args, null, "", "", "", new int[]{}, "");
 
     assertEquals(
         "com.bing.cache.util.CacheKeyGeneratorTest$TestService.noArg()([])", key);
@@ -150,8 +150,8 @@ class CacheKeyGeneratorTest {
   void testDifferentArgsProduceDifferentKeys() throws NoSuchMethodException {
     Method method = TestService.class.getMethod("findById", Long.class);
 
-    String key1 = generator.generate(method, new Object[]{1L}, null, "", "", new int[]{}, "");
-    String key2 = generator.generate(method, new Object[]{2L}, null, "", "", new int[]{}, "");
+    String key1 = generator.generate(method, new Object[]{1L}, null, "", "", "", new int[]{}, "");
+    String key2 = generator.generate(method, new Object[]{2L}, null, "", "", "", new int[]{}, "");
 
     assertNotEquals(key1, key2);
   }
@@ -163,8 +163,8 @@ class CacheKeyGeneratorTest {
   void testSameArgsProduceSameKeys() throws NoSuchMethodException {
     Method method = TestService.class.getMethod("findById", Long.class);
 
-    String key1 = generator.generate(method, new Object[]{1L}, null, "prefix", "", new int[]{}, "");
-    String key2 = generator.generate(method, new Object[]{1L}, null, "prefix", "", new int[]{}, "");
+    String key1 = generator.generate(method, new Object[]{1L}, null, "", "prefix", "", new int[]{}, "");
+    String key2 = generator.generate(method, new Object[]{1L}, null, "", "prefix", "", new int[]{}, "");
 
     assertEquals(key1, key2);
   }
@@ -178,7 +178,7 @@ class CacheKeyGeneratorTest {
     TestUser user = new TestUser(1L, "Alice");
     Object[] args = {user};
 
-    String key = generator.generate(method, args, null, "", "", new int[]{}, "");
+    String key = generator.generate(method, args, null, "", "", "", new int[]{}, "");
 
     assertTrue(key.contains("\"id\":1"));
     assertTrue(key.contains("\"name\":\"Alice\""));
@@ -193,8 +193,8 @@ class CacheKeyGeneratorTest {
     TestUser user1 = new TestUser(1L, "Alice");
     TestUser user2 = new TestUser(1L, "Alice");
 
-    String key1 = generator.generate(method, new Object[]{user1}, null, "", "", new int[]{}, "");
-    String key2 = generator.generate(method, new Object[]{user2}, null, "", "", new int[]{}, "");
+    String key1 = generator.generate(method, new Object[]{user1}, null, "", "", "", new int[]{}, "");
+    String key2 = generator.generate(method, new Object[]{user2}, null, "", "", "", new int[]{}, "");
 
     assertEquals(key1, key2);
   }
@@ -208,8 +208,8 @@ class CacheKeyGeneratorTest {
     TestUser user1 = new TestUser(1L, "Alice");
     TestUser user2 = new TestUser(2L, "Bob");
 
-    String key1 = generator.generate(method, new Object[]{user1}, null, "", "", new int[]{}, "");
-    String key2 = generator.generate(method, new Object[]{user2}, null, "", "", new int[]{}, "");
+    String key1 = generator.generate(method, new Object[]{user1}, null, "", "", "", new int[]{}, "");
+    String key2 = generator.generate(method, new Object[]{user2}, null, "", "", "", new int[]{}, "");
 
     assertNotEquals(key1, key2);
   }
@@ -222,7 +222,7 @@ class CacheKeyGeneratorTest {
     Method method = TestService.class.getMethod("findById", Long.class);
     Object[] args = {null};
 
-    String key = generator.generate(method, args, null, "", "", new int[]{}, "");
+    String key = generator.generate(method, args, null, "", "", "", new int[]{}, "");
 
     assertTrue(key.contains("null"));
   }
@@ -237,7 +237,7 @@ class CacheKeyGeneratorTest {
     String longArg = "x".repeat(500);
     Object[] args = {longArg};
 
-    String key = generator.generate(method, args, null, "", "", new int[]{}, "");
+    String key = generator.generate(method, args, null, "", "", "", new int[]{}, "");
 
     assertEquals(CacheKeyGenerator.MAX_KEY_LENGTH, key.length());
     assertTrue(key.contains("...#"));
@@ -252,8 +252,8 @@ class CacheKeyGeneratorTest {
     String longArg1 = "a".repeat(500);
     String longArg2 = "b".repeat(500);
 
-    String key1 = generator.generate(method, new Object[]{longArg1}, null, "", "", new int[]{}, "");
-    String key2 = generator.generate(method, new Object[]{longArg2}, null, "", "", new int[]{}, "");
+    String key1 = generator.generate(method, new Object[]{longArg1}, null, "", "", "", new int[]{}, "");
+    String key2 = generator.generate(method, new Object[]{longArg2}, null, "", "", "", new int[]{}, "");
 
     assertNotEquals(key1, key2);
   }
@@ -267,7 +267,7 @@ class CacheKeyGeneratorTest {
     int[] ints = {1, 2, 3};
     Object[] args = {ints};
 
-    String key = generator.generate(method, args, null, "", "", new int[]{}, "");
+    String key = generator.generate(method, args, null, "", "", "", new int[]{}, "");
 
     assertTrue(key.contains("[A:[N:1, N:2, N:3]]"));
   }
@@ -283,7 +283,7 @@ class CacheKeyGeneratorTest {
     // argIndexes 中包含越界索引 5，应抛出异常
     IllegalArgumentException ex = assertThrows(
         IllegalArgumentException.class,
-        () -> generator.generate(method, args, null, "", "", new int[]{0, 5}, ""));
+        () -> generator.generate(method, args, null, "", "", "", new int[]{0, 5}, ""));
     assertTrue(ex.getMessage().contains("argIndexes[1]=5"));
     assertTrue(ex.getMessage().contains("args length=3"));
   }
@@ -305,7 +305,7 @@ class CacheKeyGeneratorTest {
 
     IllegalStateException ex = assertThrows(
         IllegalStateException.class,
-        () -> generator.generate(method, args, null, "", "", new int[]{}, ""));
+        () -> generator.generate(method, args, null, "", "", "", new int[]{}, ""));
     assertTrue(ex.getMessage().contains("Failed to serialize argument of type"));
     assertTrue(ex.getCause() instanceof com.fasterxml.jackson.core.JsonProcessingException);
   }
@@ -320,7 +320,7 @@ class CacheKeyGeneratorTest {
     Method method = TestService.class.getMethod("findById", Long.class);
     Object[] args = {1L};
 
-    String key = generator.generate(method, args, null, "user", "", new int[]{}, "#id");
+    String key = generator.generate(method, args, null, "", "user", "", new int[]{}, "#id");
 
     assertEquals("user(N:1)", key);
   }
@@ -334,7 +334,7 @@ class CacheKeyGeneratorTest {
     TestUser user = new TestUser(42L, "Bob");
     Object[] args = {user};
 
-    String key = generator.generate(method, args, null, "user", "", new int[]{}, "#user.id");
+    String key = generator.generate(method, args, null, "", "user", "", new int[]{}, "#user.id");
 
     assertEquals("user(N:42)", key);
   }
@@ -348,7 +348,7 @@ class CacheKeyGeneratorTest {
         Long.class);
     Object[] args = {"a", 2, 3L};
 
-    String key = generator.generate(method, args, null, "cache", "", new int[]{},
+    String key = generator.generate(method, args, null, "", "cache", "", new int[]{},
         "#a + ':' + #b + ':' + #c");
 
     assertEquals("cache(S:a:2:3)", key);
@@ -362,8 +362,8 @@ class CacheKeyGeneratorTest {
     Method method = TestService.class.getMethod("findById", Long.class);
     Object[] args = {99L};
 
-    String keyP0 = generator.generate(method, args, null, "user", "", new int[]{}, "#p0");
-    String keyA0 = generator.generate(method, args, null, "user", "", new int[]{}, "#a0");
+    String keyP0 = generator.generate(method, args, null, "", "user", "", new int[]{}, "#p0");
+    String keyA0 = generator.generate(method, args, null, "", "user", "", new int[]{}, "#a0");
 
     assertEquals("user(N:99)", keyP0);
     assertEquals("user(N:99)", keyA0);
@@ -377,7 +377,7 @@ class CacheKeyGeneratorTest {
     Method method = TestService.class.getMethod("findById", Long.class);
     Object[] args = {1L};
 
-    String key = generator.generate(method, args, null, "cache", "", new int[]{},
+    String key = generator.generate(method, args, null, "", "cache", "", new int[]{},
         "#root.methodName + ':' + #id");
 
     assertEquals("cache(S:findById:1)", key);
@@ -392,7 +392,7 @@ class CacheKeyGeneratorTest {
     TestUser user = new TestUser(null, "Bob");
     Object[] args = {user};
 
-    String key = generator.generate(method, args, null, "user", "", new int[]{}, "#user.id");
+    String key = generator.generate(method, args, null, "", "user", "", new int[]{}, "#user.id");
 
     assertEquals("user(null)", key);
   }
@@ -406,7 +406,7 @@ class CacheKeyGeneratorTest {
     TestUser user = new TestUser(1L, "Alice");
     Object[] args = {user};
 
-    String key = generator.generate(method, args, null, "user", "", new int[]{}, "#user");
+    String key = generator.generate(method, args, null, "", "user", "", new int[]{}, "#user");
 
     assertTrue(key.contains("\"id\":1"));
     assertTrue(key.contains("\"name\":\"Alice\""));
@@ -421,8 +421,8 @@ class CacheKeyGeneratorTest {
         Long.class);
     Object[] args = {"a", 2, 3L};
 
-    String keyWithSpel = generator.generate(method, args, null, "", "", new int[]{}, "");
-    String keyWithArgIndexes = generator.generate(method, args, null, "", "",
+    String keyWithSpel = generator.generate(method, args, null, "", "", "", new int[]{}, "");
+    String keyWithArgIndexes = generator.generate(method, args, null, "", "", "",
         new int[]{0, 2}, "");
 
     assertEquals(
@@ -442,7 +442,7 @@ class CacheKeyGeneratorTest {
         Long.class);
     Object[] args = {"a", 2, 3L};
 
-    String key = generator.generate(method, args, null, "cache", "",
+    String key = generator.generate(method, args, null, "", "cache", "",
         new int[]{0, 2}, "#c");
 
     assertEquals("cache(N:3)", key);
@@ -458,7 +458,7 @@ class CacheKeyGeneratorTest {
 
     IllegalStateException ex = assertThrows(
         IllegalStateException.class,
-        () -> generator.generate(method, args, null, "user", "", new int[]{},
+        () -> generator.generate(method, args, null, "", "user", "", new int[]{},
             "#id +"));
     assertTrue(ex.getMessage().contains("Failed to evaluate SpEL key expression"));
   }
@@ -472,9 +472,9 @@ class CacheKeyGeneratorTest {
     TestUser user1 = new TestUser(1L, "Alice");
     TestUser user2 = new TestUser(1L, "Alice");
 
-    String key1 = generator.generate(method, new Object[]{user1}, null, "user", "",
+    String key1 = generator.generate(method, new Object[]{user1}, null, "", "user", "",
         new int[]{}, "#user.id");
-    String key2 = generator.generate(method, new Object[]{user2}, null, "user", "",
+    String key2 = generator.generate(method, new Object[]{user2}, null, "", "user", "",
         new int[]{}, "#user.id");
 
     assertEquals(key1, key2);
@@ -489,9 +489,9 @@ class CacheKeyGeneratorTest {
     TestUser user1 = new TestUser(1L, "Alice");
     TestUser user2 = new TestUser(2L, "Bob");
 
-    String key1 = generator.generate(method, new Object[]{user1}, null, "user", "",
+    String key1 = generator.generate(method, new Object[]{user1}, null, "", "user", "",
         new int[]{}, "#user.id");
-    String key2 = generator.generate(method, new Object[]{user2}, null, "user", "",
+    String key2 = generator.generate(method, new Object[]{user2}, null, "", "user", "",
         new int[]{}, "#user.id");
 
     assertNotEquals(key1, key2);
@@ -514,9 +514,9 @@ class CacheKeyGeneratorTest {
 
     // 1L 和 "1" 序列化后都是 "1"，但参数类型不同
     String keyFromLong = generator.generate(longMethod, new Object[]{1L}, null,
-        "", "", new int[]{}, "");
+        "", "", "", new int[]{}, "");
     String keyFromString = generator.generate(stringMethod, new Object[]{"1"}, null,
-        "", "", new int[]{}, "");
+        "", "", "", new int[]{}, "");
 
     assertNotEquals(keyFromLong, keyFromString,
         "重载方法 + 不同类型参数序列化后字符串相同时，应通过参数类型签名区分");
@@ -537,11 +537,11 @@ class CacheKeyGeneratorTest {
     Method stringMethod = TestService.class.getMethod("findById", String.class);
 
     String keyFromInt = generator.generate(intMethod, new Object[]{1}, null,
-        "user", "", new int[]{}, "");
+        "", "user", "", new int[]{}, "");
     String keyFromLong = generator.generate(longMethod, new Object[]{1L}, null,
-        "user", "", new int[]{}, "");
+        "", "user", "", new int[]{}, "");
     String keyFromString = generator.generate(stringMethod, new Object[]{"1"}, null,
-        "user", "", new int[]{}, "");
+        "", "user", "", new int[]{}, "");
 
     assertEquals("user([N:1])", keyFromInt);
     assertEquals(keyFromInt, keyFromLong);

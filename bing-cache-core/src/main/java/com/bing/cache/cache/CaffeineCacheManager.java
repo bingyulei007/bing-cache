@@ -124,6 +124,14 @@ public class CaffeineCacheManager implements CacheManager {
     cache.asMap().keySet().removeIf(key -> key.startsWith(matchPrefix));
   }
 
+  @Override
+  public void clearByGroup(String group) {
+    // 匹配 "group:" 开头的 L1 key
+    // 缓存 key 格式为 group:prefix(args)，追加 ":" 精确匹配 group 前缀
+    String matchPrefix = group + ":";
+    cache.asMap().keySet().removeIf(key -> key.startsWith(matchPrefix));
+  }
+
   /**
    * 获取当前缓存中所有的 key（用于对账等场景）.
    *

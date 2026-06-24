@@ -138,6 +138,16 @@ public class CompositeCacheManager implements CacheManager {
     LOG.debug("Cache clear by prefix (L2+L1+pub): {}", prefix);
   }
 
+  @Override
+  public void clearByGroup(String group) {
+    // 与 evict/clearByPrefix 保持一致：先清 L2 再清 L1，缩小 TOCTOU 窗口
+    l2CacheManager.clearByGroup(group);
+    l1CacheManager.clearByGroup(group);
+    invalidationPublisher.publishClearByGroup(group);
+    incrementGroupVersion(group);
+    LOG.debug("Cache clear by group (L2+L1+pub): {}", group);
+  }
+
   /**
    * 获取 L1 本地缓存管理器.
    *
@@ -212,6 +222,24 @@ public class CompositeCacheManager implements CacheManager {
         versionStore.incrementAllVersion();
       } catch (Exception e) {
         LOG.warn("Failed to increment global version: {}", e.getMessage());
+      }
+    }
+  }
+
+  /**
+   * 递增指定 group 的版本号.
+   *
+   * <p>与 {@link #incrementVersion(String)} 和 {@link #incrementAllVersion()} 一致，
+   * 内部包含 versionStore 的 null 守卫和 try-catch。</p>
+   *
+   * @param group 缓存分组名称
+   */
+  private void incrementGroupVersion(String group) {
+    if (versionStore != null) {
+      try {
+        versionStore.incrementGroupVersion(group);
+      } catch (Exception e) {
+        LOG.warn("Failed to increment group version for '{}': {}", group, e.getMessage());
       }
     }
   }

@@ -53,6 +53,8 @@ public class CacheReconciliationService implements SmartLifecycle {
 
   private volatile long lastKnownAllVersion = 0L;
 
+  private final Map<String, Long> lastKnownGroupVersions = new ConcurrentHashMap<>();
+
   private ScheduledExecutorService scheduler;
 
   private volatile boolean running = false;
@@ -144,6 +146,17 @@ public class CacheReconciliationService implements SmartLifecycle {
       for (String cacheName : activeNames) {
         checkCacheNameVersion(cacheName);
       }
+
+      // 检查各 group 的版本号
+      Optional<Set<String>> activeGroupsOpt = versionStore.getActiveGroups();
+      if (activeGroupsOpt.isEmpty()) {
+        LOG.warn("Active groups unavailable, skipping group reconciliation this cycle");
+      } else {
+        Set<String> activeGroups = activeGroupsOpt.get();
+        for (String group : activeGroups) {
+          checkGroupVersion(group);
+        }
+      }
     } catch (Exception e) {
       LOG.error("Bing Cache: Reconciliation failed", e);
     }
@@ -173,6 +186,26 @@ public class CacheReconciliationService implements SmartLifecycle {
   }
 
   /**
+   * 检查指定 group 的版本号变化.
+   *
+   * @param group 缓存分组名称
+   */
+  private void checkGroupVersion(String group) {
+    long currentVersion = versionStore.getGroupVersion(group);
+    Long lastVersion = lastKnownGroupVersions.get(group);
+    if (lastVersion == null) {
+      lastKnownGroupVersions.put(group, currentVersion);
+      return;
+    }
+    if (currentVersion != lastVersion) {
+      LOG.info("Bing Cache: Group version changed for '{}' ({} -> {}), clearing L1 by group",
+          group, lastVersion, currentVersion);
+      l1CacheManager.clearByGroup(group);
+      lastKnownGroupVersions.put(group, currentVersion);
+    }
+  }
+
+  /**
    * 全局版本变化后，刷新所有已知 cacheName 的版本号.
    *
    * <p>同时清理已不存在于 Redis 中的过期 cacheName，防止 lastKnownVersions 无限增长。</p>
@@ -189,6 +222,17 @@ public class CacheReconciliationService implements SmartLifecycle {
     lastKnownVersions.keySet().retainAll(activeNames);
     for (String cacheName : activeNames) {
       lastKnownVersions.put(cacheName, versionStore.getVersion(cacheName));
+    }
+    // 刷新 group 版本号
+    Optional<Set<String>> activeGroupsOpt = versionStore.getActiveGroups();
+    if (activeGroupsOpt.isEmpty()) {
+      LOG.warn("Active groups unavailable, skipping group version refresh to preserve state");
+    } else {
+      Set<String> activeGroups = activeGroupsOpt.get();
+      lastKnownGroupVersions.keySet().retainAll(activeGroups);
+      for (String group : activeGroups) {
+        lastKnownGroupVersions.put(group, versionStore.getGroupVersion(group));
+      }
     }
   }
 }

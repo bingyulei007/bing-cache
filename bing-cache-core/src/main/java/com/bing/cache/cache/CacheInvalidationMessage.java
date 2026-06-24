@@ -18,6 +18,7 @@ package com.bing.cache.cache;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
@@ -32,7 +33,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class CacheInvalidationMessage {
 
-  private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+  private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper()
+      .enable(DeserializationFeature.READ_UNKNOWN_ENUM_VALUES_AS_NULL);
 
   /**
    * 失效消息类型.
@@ -43,12 +45,16 @@ public class CacheInvalidationMessage {
     /** 全量清除. */
     CLEAR,
     /** 按前缀清除. */
-    CLEAR_PREFIX
+    CLEAR_PREFIX,
+    /** 按分组清除. */
+    CLEAR_GROUP
   }
 
   private Type type;
 
   private String key;
+
+  private String group;
 
   private long timestamp;
 
@@ -102,6 +108,20 @@ public class CacheInvalidationMessage {
   }
 
   /**
+   * 创建按分组清除消息.
+   *
+   * @param group      需要清除的缓存分组名称
+   * @param instanceId 发送实例的唯一标识，用于避免自己处理自己发出的消息
+   * @return 按分组清除消息
+   */
+  public static CacheInvalidationMessage clearGroup(String group, String instanceId) {
+    CacheInvalidationMessage msg = new CacheInvalidationMessage(Type.CLEAR_GROUP, null,
+        System.currentTimeMillis(), instanceId);
+    msg.group = group;
+    return msg;
+  }
+
+  /**
    * 将消息序列化为 JSON 字符串.
    *
    * @return JSON 字符串
@@ -134,6 +154,14 @@ public class CacheInvalidationMessage {
 
   public String getKey() {
     return key;
+  }
+
+  public String getGroup() {
+    return group;
+  }
+
+  public void setGroup(String group) {
+    this.group = group;
   }
 
   public long getTimestamp() {

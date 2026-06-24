@@ -83,6 +83,12 @@ public class RedisCacheInvalidationPublisher implements CacheInvalidationPublish
     publish(message);
   }
 
+  @Override
+  public void publishClearByGroup(String group) {
+    CacheInvalidationMessage message = CacheInvalidationMessage.clearGroup(group, instanceId);
+    publish(message);
+  }
+
   private void publish(CacheInvalidationMessage message) {
     try {
       String json = message.toJson();

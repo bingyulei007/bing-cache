@@ -67,4 +67,17 @@ public interface CacheManager {
    * @param prefix 缓存 key 前缀（即 cacheName 或 keyPrefix 的值）
    */
   void clearByPrefix(String prefix);
+
+  /**
+   * 按分组清除缓存.
+   *
+   * <p>清除所有 key 以 {@code group + ":"} 开头的缓存条目，
+   * 即该 group 下所有 cacheName 的全部缓存。</p>
+   *
+   * <p>用于 {@code @BingCacheEvict(group="xxx", allEntries=true)} 时，
+   * 清除整个 group 下的缓存，而非仅单个 cacheName。</p>
+   *
+   * @param group 缓存分组名称
+   */
+  void clearByGroup(String group);
 }
