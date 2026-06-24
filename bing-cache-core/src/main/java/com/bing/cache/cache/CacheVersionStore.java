@@ -191,7 +191,7 @@ public class CacheVersionStore {
     String pattern = versionKeyPrefix + GROUP_VERSION_PREFIX + "*";
     Optional<Set<String>> result = stringRedisTemplate.execute(
         (RedisCallback<Optional<Set<String>>>) connection -> {
-        Set<String> groups = new java.util.HashSet<>();
+        Set<String> groups = new HashSet<>();
         ScanOptions options = ScanOptions.scanOptions().match(pattern).count(100).build();
         var keyCommands = connection.keyCommands();
         if (keyCommands == null) {
@@ -200,7 +200,7 @@ public class CacheVersionStore {
         }
         try (var cursor = keyCommands.scan(options)) {
           while (cursor.hasNext()) {
-            String key = new String(cursor.next(), java.nio.charset.StandardCharsets.UTF_8);
+            String key = new String(cursor.next(), StandardCharsets.UTF_8);
             String groupName = key.substring(
                 (versionKeyPrefix + GROUP_VERSION_PREFIX).length());
             groups.add(groupName);
