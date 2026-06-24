@@ -42,4 +42,11 @@ public interface CacheInvalidationPublisher {
    * @param prefix 需要清除的缓存 key 前缀
    */
   void publishClearByPrefix(String prefix);
+
+  /**
+   * 发布按分组清除通知.
+   *
+   * @param group 需要清除的缓存分组名称
+   */
+  void publishClearByGroup(String group);
 }

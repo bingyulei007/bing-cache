@@ -88,6 +88,19 @@ public class CacheVersionStore {
   }
 
   /**
+   * 递增指定 group 的版本号.
+   *
+   * <p>与 {@link #incrementVersion(String)} 和 {@link #incrementAllVersion()} 一致，
+   * 版本号用于版本对账机制，当对账服务检测到版本号变化时清除对应 group 的 L1 缓存。</p>
+   *
+   * @param group 缓存分组名称
+   * @return 递增后的版本号
+   */
+  public long incrementGroupVersion(String group) {
+    return incrementVersion(group);
+  }
+
+  /**
    * 获取指定 cacheName 的当前版本号.
    *
    * @param cacheName 缓存名称

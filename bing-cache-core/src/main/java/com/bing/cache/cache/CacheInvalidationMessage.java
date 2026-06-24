@@ -43,7 +43,9 @@ public class CacheInvalidationMessage {
     /** 全量清除. */
     CLEAR,
     /** 按前缀清除. */
-    CLEAR_PREFIX
+    CLEAR_PREFIX,
+    /** 按分组清除. */
+    CLEAR_GROUP
   }
 
   private Type type;
@@ -98,6 +100,18 @@ public class CacheInvalidationMessage {
    */
   public static CacheInvalidationMessage clearPrefix(String prefix, String instanceId) {
     return new CacheInvalidationMessage(Type.CLEAR_PREFIX, prefix, System.currentTimeMillis(),
+        instanceId);
+  }
+
+  /**
+   * 创建按分组清除消息.
+   *
+   * @param group      需要清除的缓存分组名称
+   * @param instanceId 发送实例的唯一标识，用于避免自己处理自己发出的消息
+   * @return 按分组清除消息
+   */
+  public static CacheInvalidationMessage clearGroup(String group, String instanceId) {
+    return new CacheInvalidationMessage(Type.CLEAR_GROUP, group, System.currentTimeMillis(),
         instanceId);
   }
 
