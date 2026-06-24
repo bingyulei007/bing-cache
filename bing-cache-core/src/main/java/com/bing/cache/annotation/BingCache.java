@@ -40,6 +40,17 @@ import java.lang.annotation.Target;
 public @interface BingCache {
 
   /**
+   * 缓存分组名称，用于将相关缓存归类.
+   *
+   * <p>group 作为缓存 key 的最外层前缀，支持按组批量清除。
+   * 不能单独使用，必须配合 {@link #cacheName()} 或 {@link #keyPrefix()}。
+   * allEntries=true 时 group 可单独使用，触发 {@code clearByGroup(group)}。</p>
+   *
+   * @return 缓存分组名称
+   */
+  String group() default "";
+
+  /**
    * 缓存名称，用于读写注解共享同一前缀.
    *
    * <p>当 {@code @BingCache} 和 {@code @BingCacheEvict} 标注在不同方法上时，

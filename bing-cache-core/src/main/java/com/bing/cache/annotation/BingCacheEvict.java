@@ -46,6 +46,17 @@ import java.lang.annotation.Target;
 public @interface BingCacheEvict {
 
   /**
+   * 缓存分组名称，用于按组清除缓存.
+   *
+   * <p>与 {@link BingCache#group()} 指定相同值可确保缓存前缀一致。
+   * 当 {@link #allEntries()} 为 {@code true} 且仅指定 group 时，
+   * 触发 {@code clearByGroup(group)} 清除该组下所有缓存条目。</p>
+   *
+   * @return 缓存分组名称
+   */
+  String group() default "";
+
+  /**
    * 缓存名称，用于读写注解共享同一前缀.
    *
    * <p>与 {@link BingCache#cacheName()} 指定相同值可确保缓存前缀一致。
