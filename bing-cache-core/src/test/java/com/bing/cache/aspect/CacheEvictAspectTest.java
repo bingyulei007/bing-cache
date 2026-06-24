@@ -32,6 +32,7 @@ import org.springframework.expression.spel.standard.SpelExpressionParser;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * CacheEvictAspect 单元测试.
@@ -257,6 +258,47 @@ class CacheEvictAspectTest {
     }
   }
 
+  /**
+   * 测试 allEntries=true + group/cacheName 时仍校验 group 保留名.
+   */
+  @Test
+  void testEvictAllEntriesWithReservedGroupAndCacheNameFails() {
+    try (AnnotationConfigApplicationContext ctx =
+        new AnnotationConfigApplicationContext(TestConfig.class)) {
+      TestService service = ctx.getBean(TestService.class);
+
+      assertThrows(IllegalStateException.class,
+          service::clearReservedGroupWithCacheName);
+    }
+  }
+
+  /**
+   * 测试 allEntries=true + cacheName 时仍校验 cacheName 保留名.
+   */
+  @Test
+  void testEvictAllEntriesWithReservedCacheNameFails() {
+    try (AnnotationConfigApplicationContext ctx =
+        new AnnotationConfigApplicationContext(TestConfig.class)) {
+      TestService service = ctx.getBean(TestService.class);
+
+      assertThrows(IllegalStateException.class,
+          service::clearReservedCacheName);
+    }
+  }
+
+  /**
+   * 测试 allEntries=true + cacheName 时仍校验 cacheName 保留前缀.
+   */
+  @Test
+  void testEvictAllEntriesWithReservedCacheNamePrefixFails() {
+    try (AnnotationConfigApplicationContext ctx =
+        new AnnotationConfigApplicationContext(TestConfig.class)) {
+      TestService service = ctx.getBean(TestService.class);
+
+      assertThrows(IllegalStateException.class,
+          service::clearReservedCacheNamePrefix);
+    }
+  }
   /**
    * 测试 SpEL key：@BingCache 缓存后，@BingCacheEvict 用相同 SpEL key 清除.
    */
@@ -499,6 +541,29 @@ class CacheEvictAspectTest {
       callCount++;
     }
 
+    /**
+     * 使用保留 group 名和 cacheName 批量清理，应被拒绝.
+     */
+    @BingCacheEvict(group = "__version__", cacheName = "user", allEntries = true)
+    public void clearReservedGroupWithCacheName() {
+      callCount++;
+    }
+
+    /**
+     * 使用保留 cacheName 批量清理，应被拒绝.
+     */
+    @BingCacheEvict(cacheName = "__all__", allEntries = true)
+    public void clearReservedCacheName() {
+      callCount++;
+    }
+
+    /**
+     * 使用保留 cacheName 前缀批量清理，应被拒绝.
+     */
+    @BingCacheEvict(cacheName = "__group__:user", allEntries = true)
+    public void clearReservedCacheNamePrefix() {
+      callCount++;
+    }
     /**
      * 使用 SpEL key 缓存.
      *

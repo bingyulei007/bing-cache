@@ -289,6 +289,13 @@ public class CacheEvictAspect {
     String cacheName = bingCacheEvict.cacheName();
     String keyPrefix = bingCacheEvict.keyPrefix();
 
+    if (group != null && !group.isEmpty()) {
+      CacheKeyGenerator.validateReservedName("group", group);
+    }
+    if (cacheName != null && !cacheName.isEmpty()) {
+      CacheKeyGenerator.validateReservedCacheName(cacheName);
+    }
+
     // 优先 cacheName，其次 keyPrefix
     String basePrefix;
     if (cacheName != null && !cacheName.isEmpty()) {

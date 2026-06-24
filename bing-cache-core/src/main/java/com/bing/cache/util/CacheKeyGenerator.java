@@ -232,7 +232,7 @@ public class CacheKeyGenerator {
    * @param cacheName 待校验的缓存名称
    * @throws IllegalStateException 如果值为保留名
    */
-  static void validateReservedCacheName(String cacheName) {
+  public static void validateReservedCacheName(String cacheName) {
     if (cacheName == null || cacheName.isEmpty()) {
       return;
     }
