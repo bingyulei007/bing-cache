@@ -87,7 +87,8 @@ public class CacheAspect {
     warnIfKeyAndArgIndexesConflict(bingCache, method);
 
     String key = cacheKeyGenerator.generate(method, args, target,
-        bingCache.cacheName(), bingCache.keyPrefix(), bingCache.argIndexes(), bingCache.argSpel());
+        bingCache.group(), bingCache.cacheName(), bingCache.keyPrefix(),
+        bingCache.argIndexes(), bingCache.argSpel());
 
     // try cache
     Object cached = cacheManager.get(key);
