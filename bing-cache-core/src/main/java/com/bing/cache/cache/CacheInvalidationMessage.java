@@ -25,7 +25,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  * 缓存失效通知消息.
  *
  * <p>用于 Redis Pub/Sub 跨实例传递缓存失效事件，
- * 支持单 key 驱逐（EVICT）、全量清除（CLEAR）和按前缀清除（CLEAR_PREFIX）三种类型。</p>
+ * 支持单 key 驱逐（EVICT）、全量清除（CLEAR）、按前缀清除（CLEAR_PREFIX）
+ * 和按分组清除（CLEAR_GROUP）四种类型。</p>
  *
  * <p>序列化方式为 Jackson JSON（{@link #toJson()} / {@link #fromJson(String)}），
  * 不使用 Java 原生序列化。</p>
