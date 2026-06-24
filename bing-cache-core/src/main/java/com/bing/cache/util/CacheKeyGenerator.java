@@ -55,6 +55,31 @@ public class CacheKeyGenerator {
   /** 缓存 key 最大长度. */
   static final int MAX_KEY_LENGTH = 256;
 
+  /**
+   * 内部保留的 group 名称，不允许业务使用.
+   *
+   * <p>这些 group 名与版本对账机制的内部命名空间冲突：
+   * {@code __version__} 会与版本 key 前缀碰撞导致 L2 业务 key 被误删；
+   * {@code __all__} 会污染全局版本号；
+   * {@code __group__:} 前缀会污染 group 版本号。</p>
+   */
+  private static final String[] RESERVED_GROUPS = {"__version__", "__all__"};
+
+  /** 内部保留的 group 前缀，不允许业务 group 以此开头. */
+  private static final String RESERVED_GROUP_PREFIX = "__group__:";
+
+  /**
+   * 内部保留的 cacheName，不允许业务使用.
+   *
+   * <p>{@code __all__} 会与全局版本 key 碰撞（incrementVersion("__all__")
+   * 与 incrementAllVersion() 共用同一 Redis key）；
+   * {@code __group__:} 前缀会与 group 版本 key 碰撞。</p>
+   */
+  private static final String[] RESERVED_CACHE_NAMES = {"__all__"};
+
+  /** 内部保留的 cacheName 前缀. */
+  private static final String RESERVED_CACHE_NAME_PREFIX = "__group__:";
+
   private final ExpressionParser expressionParser;
 
   private final ParameterNameDiscoverer parameterNameDiscoverer;
@@ -104,6 +129,7 @@ public class CacheKeyGenerator {
     String methodName = method.getName();
     String prefix;
     if (cacheName != null && !cacheName.isEmpty()) {
+      validateReservedCacheName(cacheName);
       prefix = cacheName;
     } else if (keyPrefix != null && !keyPrefix.isEmpty()) {
       prefix = keyPrefix;
@@ -119,10 +145,11 @@ public class CacheKeyGenerator {
 
     // group 作为最外层前缀拼接，并在非 allEntries 场景校验 group 不能单独使用
     if (group != null && !group.isEmpty()) {
+      validateReservedName("group", group);
       if (!StringUtils.hasText(cacheName) && !StringUtils.hasText(keyPrefix)) {
         throw new IllegalStateException(
             "@BingCache/@BingCacheEvict group='" + group + "' requires cacheName or keyPrefix. "
-            + "group cannot be used alone without allEntries=true.");
+            + "group alone is only valid on @BingCacheEvict with allEntries=true.");
       }
       prefix = group + ":" + prefix;
     }
@@ -161,6 +188,66 @@ public class CacheKeyGenerator {
     } catch (Exception e) {
       throw new IllegalStateException(
           "Failed to evaluate SpEL key expression: " + keyExpression, e);
+    }
+  }
+
+  /**
+   * 校验 group 是否为内部保留名.
+   *
+   * <p>保留的 group 名称包括 {@code __version__}（与版本 key 前缀碰撞，
+   * 导致 clearByGroup 误删版本 key）、{@code __all__}（污染全局版本号）、
+   * 以及 {@code __group__:} 前缀（污染 group 版本号）。
+   * 这些名称与版本对账机制的内部命名空间冲突，业务侧不得使用。</p>
+   *
+   * @param label 参数标签，用于异常消息（"group" 或 "cacheName"）
+   * @param value 待校验的值
+   * @throws IllegalStateException 如果值为保留名
+   */
+  public static void validateReservedName(String label, String value) {
+    if (value == null || value.isEmpty()) {
+      return;
+    }
+    for (String reserved : RESERVED_GROUPS) {
+      if (reserved.equals(value)) {
+        throw new IllegalStateException(
+            label + "='" + value + "' is reserved for internal use and cannot be used "
+            + "in @BingCache/@BingCacheEvict. Reserved names: __version__, __all__, "
+            + "and any value starting with __group__:");
+      }
+    }
+    if (value.startsWith(RESERVED_GROUP_PREFIX)) {
+      throw new IllegalStateException(
+          label + "='" + value + "' starts with reserved prefix '__group__:' and cannot be used "
+          + "in @BingCache/@BingCacheEvict.");
+    }
+  }
+
+  /**
+   * 校验 cacheName 是否为内部保留名.
+   *
+   * <p>保留的 cacheName 包括 {@code __all__}（与全局版本 key 碰撞，
+   * incrementVersion("__all__") 与 incrementAllVersion() 共用同一 Redis key）、
+   * 以及 {@code __group__:} 前缀（与 group 版本 key 碰撞）。</p>
+   *
+   * @param cacheName 待校验的缓存名称
+   * @throws IllegalStateException 如果值为保留名
+   */
+  static void validateReservedCacheName(String cacheName) {
+    if (cacheName == null || cacheName.isEmpty()) {
+      return;
+    }
+    for (String reserved : RESERVED_CACHE_NAMES) {
+      if (reserved.equals(cacheName)) {
+        throw new IllegalStateException(
+            "cacheName='" + cacheName + "' is reserved for internal use and cannot be used "
+            + "in @BingCache/@BingCacheEvict. Reserved names: __all__, "
+            + "and any value starting with __group__:");
+      }
+    }
+    if (cacheName.startsWith(RESERVED_CACHE_NAME_PREFIX)) {
+      throw new IllegalStateException(
+          "cacheName='" + cacheName + "' starts with reserved prefix '__group__:' and cannot be used "
+          + "in @BingCache/@BingCacheEvict.");
     }
   }
 

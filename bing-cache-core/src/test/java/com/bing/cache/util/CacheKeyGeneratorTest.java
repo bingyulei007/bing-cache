@@ -549,6 +549,77 @@ class CacheKeyGeneratorTest {
     assertNotEquals(keyFromInt, keyFromString);
   }
 
+  // ==================== 保留名校验测试 ====================
+
+  @Test
+  void testGroupVersionReserved() {
+    IllegalStateException ex = assertThrows(IllegalStateException.class,
+        () -> generator.generate(getMethod("findById", Long.class), new Object[]{1L}, null,
+            "__version__", "user", null, null, null));
+    assertTrue(ex.getMessage().contains("__version__"));
+    assertTrue(ex.getMessage().contains("reserved"));
+  }
+
+  @Test
+  void testGroupAllReserved() {
+    IllegalStateException ex = assertThrows(IllegalStateException.class,
+        () -> generator.generate(getMethod("findById", Long.class), new Object[]{1L}, null,
+            "__all__", "user", null, null, null));
+    assertTrue(ex.getMessage().contains("__all__"));
+    assertTrue(ex.getMessage().contains("reserved"));
+  }
+
+  @Test
+  void testGroupPrefixReserved() {
+    IllegalStateException ex = assertThrows(IllegalStateException.class,
+        () -> generator.generate(getMethod("findById", Long.class), new Object[]{1L}, null,
+            "__group__:user", "detail", null, null, null));
+    assertTrue(ex.getMessage().contains("__group__:"));
+    assertTrue(ex.getMessage().contains("reserved"));
+  }
+
+  @Test
+  void testCacheNameAllReserved() {
+    IllegalStateException ex = assertThrows(IllegalStateException.class,
+        () -> generator.generate(getMethod("findById", Long.class), new Object[]{1L}, null,
+            null, "__all__", null, null, null));
+    assertTrue(ex.getMessage().contains("__all__"));
+    assertTrue(ex.getMessage().contains("reserved"));
+  }
+
+  @Test
+  void testCacheNameGroupPrefixReserved() {
+    IllegalStateException ex = assertThrows(IllegalStateException.class,
+        () -> generator.generate(getMethod("findById", Long.class), new Object[]{1L}, null,
+            null, "__group__:user", null, null, null));
+    assertTrue(ex.getMessage().contains("__group__:"));
+    assertTrue(ex.getMessage().contains("reserved"));
+  }
+
+  @Test
+  void testValidateReservedNameAllowsNormalValues() {
+    CacheKeyGenerator.validateReservedName("group", "user");
+    CacheKeyGenerator.validateReservedName("group", "orders");
+    CacheKeyGenerator.validateReservedCacheName("userDetail");
+    CacheKeyGenerator.validateReservedCacheName("config");
+  }
+
+  @Test
+  void testValidateReservedNameAllowsEmptyOrNull() {
+    CacheKeyGenerator.validateReservedName("group", null);
+    CacheKeyGenerator.validateReservedName("group", "");
+    CacheKeyGenerator.validateReservedCacheName(null);
+    CacheKeyGenerator.validateReservedCacheName("");
+  }
+
+  private Method getMethod(String name, Class<?>... paramTypes) {
+    try {
+      return TestService.class.getMethod(name, paramTypes);
+    } catch (NoSuchMethodException e) {
+      throw new RuntimeException(e);
+    }
+  }
+
   /**
    * 测试用的 Service 类.
    */

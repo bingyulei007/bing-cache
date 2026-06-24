@@ -257,6 +257,7 @@ public class CacheEvictAspect {
 
       if (hasGroup && prefix == null) {
         // allEntries=true + 仅 group（无 cacheName/keyPrefix）→ clearByGroup
+        CacheKeyGenerator.validateReservedName("group", group);
         cacheManager.clearByGroup(group);
         LOG.debug("Cache clear by group: {}", group);
       } else if (prefix != null && !prefix.isEmpty()) {
