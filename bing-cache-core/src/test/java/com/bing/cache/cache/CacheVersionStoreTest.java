@@ -126,10 +126,10 @@ class CacheVersionStoreTest {
     Optional<Set<String>> namesOpt = versionStore.getActiveCacheNames();
     assertTrue(namesOpt.isPresent());
     Set<String> names = namesOpt.get();
-    assertEquals(3, names.size());
+    assertEquals(2, names.size());
     assertTrue(names.contains("user"));
     assertTrue(names.contains("dict"));
-    assertTrue(names.contains("__all__"));
+    // __all__ 和 __group__: 前缀的 key 已被 getActiveCacheNames() 过滤
   }
 
   @Test
