@@ -250,6 +250,26 @@ public class RedisCacheManager implements CacheManager {
   }
 
   /**
+   * 按分组清除所有 Redis 缓存.
+   *
+   * <p>通过 SCAN 匹配 {@code keyPrefix + group + ":*"} 开头的 key，
+   * 批量删除该 group 下所有缓存条目。</p>
+   *
+   * @param group 缓存分组名称
+   */
+  public void clearByGroup(String group) {
+    try {
+      String pattern = keyPrefix + group + ":*";
+      String literalPrefix = keyPrefix + group + ":";
+      long deleted = scanAndDeleteInBatches(pattern, literalPrefix, null, useUnlink);
+      LOG.debug("Redis cache clear by group: {}, deleted {} keys", group, deleted);
+      recordSuccess();
+    } catch (Exception e) {
+      recordFailure("clearByGroup", keyPrefix + group + ":*", e);
+    }
+  }
+
+  /**
    * 批量删除结果记录.
    *
    * @param deleted       本批次删除的 key 数量
