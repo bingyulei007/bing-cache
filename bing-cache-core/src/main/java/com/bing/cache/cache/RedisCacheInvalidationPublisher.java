@@ -93,11 +93,11 @@ public class RedisCacheInvalidationPublisher implements CacheInvalidationPublish
     try {
       String json = message.toJson();
       stringRedisTemplate.convertAndSend(channelName, json);
-      LOG.debug("Published cache invalidation message: type={}, key={}",
-          message.getType(), message.getKey());
+      LOG.debug("Published cache invalidation message: type={}, key={}, group={}",
+          message.getType(), message.getKey(), message.getGroup());
     } catch (Exception e) {
-      LOG.error("Failed to publish cache invalidation message: type={}, key={}",
-          message.getType(), message.getKey(), e);
+      LOG.error("Failed to publish cache invalidation message: type={}, key={}, group={}",
+          message.getType(), message.getKey(), message.getGroup(), e);
     }
   }
 }
