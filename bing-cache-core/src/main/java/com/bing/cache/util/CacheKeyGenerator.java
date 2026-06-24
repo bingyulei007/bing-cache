@@ -23,6 +23,7 @@ import java.lang.reflect.Array;
 import java.lang.reflect.Method;
 import java.math.BigInteger;
 import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
@@ -156,9 +157,20 @@ public class CacheKeyGenerator {
 
     String argsStr;
     if (StringUtils.hasText(keyExpression)) {
-      Object evaluated = evaluateKey(method, args, target, keyExpression);
-      argsStr = serializeArg(evaluated);
+      // argSpel:按表达式形式判断单值/多值
+      // 约定:以 { 开头且以 } 结尾为多值选取(SpEL 列表字面量),元素用逗号分隔
+      String trimmed = keyExpression.trim();
+      if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+        // 多值:SpEL 求值得 List → 逐元素序列化,输出 [N:1,N:2]
+        Object evaluated = evaluateKey(method, args, target, keyExpression);
+        argsStr = serializeMultiValue(evaluated);
+      } else {
+        // 单值:SpEL 求值 → serializeSingle,输出 Sg[N:1]
+        Object evaluated = evaluateKey(method, args, target, keyExpression);
+        argsStr = serializeSingle(evaluated);
+      }
     } else {
+      // argIndexes/默认:按参与参数个数决定
       Object[] keyArgs = filterArgs(args, argIndexes);
       argsStr = serializeArgs(keyArgs);
     }
@@ -288,39 +300,98 @@ public class CacheKeyGenerator {
   }
 
   /**
-   * 将参数数组序列化为字符串.
+   * 将参数数组序列化为字符串（argIndexes/默认方式）.
    *
-   * <p>对于整数数值类型使用统一数值前缀，确保 {@code Integer 1} 与 {@code Long 1L}
-   * 生成相同 key；对于字符串、布尔、字符和小数类型使用独立前缀，避免 {@code "1"}
-   * 与 {@code 1} 等不同语义值碰撞。对于数组递归序列化元素；
-   * 对于其他自定义对象使用 Jackson 序列化为 JSON，
-   * 确保不依赖 {@code toString()} 实现也能生成确定性 key。</p>
+   * <p>按参与 key 生成的参数个数决定输出形式：</p>
+   * <ul>
+   *   <li>0 个参数：返回空字符串（key 形如 {@code prefix()}）</li>
+   *   <li>1 个参数：走 {@link #serializeSingle}，输出 {@code Sg[N:1]}（与 argSpel 单值一致）</li>
+   *   <li>≥2 个参数：输出 {@code [N:1, N:2]}（与 argSpel {@code {#a,#b}} 多值一致）</li>
+   * </ul>
    *
    * @param args 参数数组
    * @return 序列化后的字符串
    */
   private static String serializeArgs(Object[] args) {
     if (args == null || args.length == 0) {
-      return "[]";
+      return "";
     }
+    if (args.length == 1) {
+      // 单参数：走 Sg[...] 形式，与 argSpel 单值场景产出一致
+      return serializeSingle(args[0]);
+    }
+    // 多参数：[element1, element2, ...]，每个元素走 serializeElement（不带 Sg）
     StringBuilder sb = new StringBuilder("[");
     for (int i = 0; i < args.length; i++) {
       if (i > 0) {
         sb.append(", ");
       }
-      sb.append(serializeArg(args[i]));
+      sb.append(serializeElement(args[i]));
     }
     sb.append("]");
     return sb.toString();
   }
 
   /**
-   * 序列化单个参数.
+   * 序列化多值 SpEL 求值结果（argSpel 以 {@code {}} 形式）.
    *
-   * @param arg 参数值
+   * <p>SpEL 列表字面量 {@code {#a, #b}} 求值后返回 {@code List}，
+   * 逐元素序列化为 {@code [N:1, N:2]} 形式，与 argIndexes/默认多参数产出一致。</p>
+   *
+   * @param evaluated SpEL 求值结果（预期为 List）
    * @return 序列化后的字符串
    */
-  private static String serializeArg(Object arg) {
+  private static String serializeMultiValue(Object evaluated) {
+    if (evaluated == null) {
+      return "[]";
+    }
+    if (evaluated instanceof List<?> list) {
+      if (list.isEmpty()) {
+        return "[]";
+      }
+      return list.stream()
+          .map(CacheKeyGenerator::serializeElement)
+          .collect(Collectors.joining(", ", "[", "]"));
+    }
+    // 罕见情况：{...} 形式但 SpEL 求值结果非 List（如 SpEL 语法异常）
+    // 降级为单值序列化，保证不抛异常
+    return serializeSingle(evaluated);
+  }
+
+  /**
+   * 单值序列化（argSpel 单值 / argIndexes 单参数 / 默认单参数）.
+   *
+   * <p>输出 {@code Sg[...]} 形式，其中 {@code Sg} 标识"single"（单个值选取），
+   * 与多参数的 {@code [...]} 形式区分，避免单值集合与多参数碰撞。</p>
+   *
+   * <p>内部按类型序列化：</p>
+   * <ul>
+   *   <li>基本类型：{@code Sg[N:1]}、{@code Sg[S:abc]} 等</li>
+   *   <li>List/数组：{@code Sg[N:1, N:2, N:3]}（逐元素加类型前缀）</li>
+   *   <li>自定义对象：{@code Sg[{"id":1}]}</li>
+   *   <li>null：{@code Sg[null]}</li>
+   * </ul>
+   *
+   * @param arg 单个值
+   * @return 序列化后的字符串
+   */
+  private static String serializeSingle(Object arg) {
+    return "Sg[" + serializeElement(arg) + "]";
+  }
+
+  /**
+   * 元素级序列化（不带 Sg 前缀）.
+   *
+   * <p>用于多参数的每个元素、List/数组的每个元素。
+   * 对于整数数值类型使用统一数值前缀 {@code N:}，确保 {@code Integer 1} 与 {@code Long 1L}
+   * 生成相同 key；字符串 {@code S:}、布尔 {@code B:}、字符 {@code C:}、小数 {@code D:}。
+   * List 与数组递归走逐元素前缀拼接，输出 {@code [N:1, N:2, N:3]}。
+   * 自定义对象使用 Jackson 序列化为 JSON。</p>
+   *
+   * @param arg 元素值
+   * @return 序列化后的字符串
+   */
+  private static String serializeElement(Object arg) {
     if (arg == null) {
       return "null";
     }
@@ -339,6 +410,16 @@ public class CacheKeyGenerator {
     }
     if (arg instanceof Number) {
       return "D:" + arg;
+    }
+    if (arg instanceof List<?>) {
+      @SuppressWarnings("unchecked")
+      List<Object> list = (List<Object>) arg;
+      if (list.isEmpty()) {
+        return "[]";
+      }
+      return list.stream()
+          .map(CacheKeyGenerator::serializeElement)
+          .collect(Collectors.joining(", ", "[", "]"));
     }
     if (arg.getClass().isArray()) {
       return serializeArray(arg);
@@ -368,12 +449,15 @@ public class CacheKeyGenerator {
    */
   private static String serializeArray(Object array) {
     int length = Array.getLength(array);
+    if (length == 0) {
+      return "[]";
+    }
     StringBuilder sb = new StringBuilder("[");
     for (int i = 0; i < length; i++) {
       if (i > 0) {
         sb.append(", ");
       }
-      sb.append(serializeArg(Array.get(array, i)));
+      sb.append(serializeElement(Array.get(array, i)));
     }
     sb.append("]");
     return sb.toString();

@@ -207,13 +207,13 @@ class CaffeineCacheManagerTest {
   @Test
   void testClearByGroup() {
     cacheManager.put("user:base([1])", "u1", 0);
-    cacheManager.put("user:list([S:a])", "list1", 0);
+    cacheManager.put("user:list(Sg[S:a])", "list1", 0);
     cacheManager.put("order:base([1])", "o1", 0);
 
     cacheManager.clearByGroup("user");
 
     assertNull(cacheManager.get("user:base([1])"));
-    assertNull(cacheManager.get("user:list([S:a])"));
+    assertNull(cacheManager.get("user:list(Sg[S:a])"));
     assertEquals("o1", cacheManager.get("order:base([1])"));
   }
 

@@ -118,9 +118,9 @@ public @interface BingCache {
    *
    * <p>注意：不支持 {@code #root.targetClass}、{@code #caches} 等 Spring Cache 特有变量。</p>
    *
-   * <p>示例：{@code argSpel = "#user.id"} 生成形如 {@code cacheName(N:1)} 的 key
-   *（参数经类型前缀序列化：整数统一 {@code N:}、字符串 {@code S:} 等，
-   * 详细规则见 {@code CacheKeyGenerator.serializeArg}）。</p>
+   * <p>示例：{@code argSpel = "#user.id"} 生成形如 {@code cacheName(Sg[N:1])} 的 key
+   *（单值选取输出 {@code Sg[...]}，多值选取输出 {@code [...]}，
+   * 详细规则见 {@code CacheKeyGenerator}）。</p>
    *
    * <p>求值结果为 null 时序列化为 {@code "null"}，自定义对象使用 Jackson 序列化。</p>
    *

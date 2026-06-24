@@ -55,7 +55,7 @@ class CacheKeyGeneratorTest {
     String key = generator.generate(method, args, null, "", "", "", new int[]{}, "");
 
     assertEquals(
-        "com.bing.cache.util.CacheKeyGeneratorTest$TestService.findById(java.lang.Long)([N:1])",
+        "com.bing.cache.util.CacheKeyGeneratorTest$TestService.findById(java.lang.Long)(Sg[N:1])",
         key);
   }
 
@@ -69,7 +69,7 @@ class CacheKeyGeneratorTest {
 
     String key = generator.generate(method, args, null, "", "", "user:detail", new int[]{}, "");
 
-    assertEquals("user:detail([N:1])", key);
+    assertEquals("user:detail(Sg[N:1])", key);
   }
 
   /**
@@ -82,7 +82,7 @@ class CacheKeyGeneratorTest {
 
     String key = generator.generate(method, args, null, "", "user", "user:detail", new int[]{}, "");
 
-    assertEquals("user([N:1])", key);
+    assertEquals("user(Sg[N:1])", key);
   }
 
   /**
@@ -95,7 +95,7 @@ class CacheKeyGeneratorTest {
 
     String key = generator.generate(method, args, null, "", "user", "", new int[]{}, "");
 
-    assertEquals("user([N:1])", key);
+    assertEquals("user(Sg[N:1])", key);
   }
 
   /**
@@ -109,7 +109,7 @@ class CacheKeyGeneratorTest {
     String key = generator.generate(method, args, null, "", "", "", new int[]{}, "");
 
     assertEquals(
-        "com.bing.cache.util.CacheKeyGeneratorTest$TestService.findById(java.lang.Long)([N:1])",
+        "com.bing.cache.util.CacheKeyGeneratorTest$TestService.findById(java.lang.Long)(Sg[N:1])",
         key);
   }
 
@@ -131,6 +131,9 @@ class CacheKeyGeneratorTest {
 
   /**
    * 测试无参数方法生成 key.
+   *
+   * <p>无参数方法 args 部分为空字符串，key 形如 {@code prefix()}。
+   * 默认前缀本身已含 {@code ()}（方法签名），故最终 key 为 {@code prefix()()}。</p>
    */
   @Test
   void testGenerateWithNoArgs() throws NoSuchMethodException {
@@ -140,7 +143,7 @@ class CacheKeyGeneratorTest {
     String key = generator.generate(method, args, null, "", "", "", new int[]{}, "");
 
     assertEquals(
-        "com.bing.cache.util.CacheKeyGeneratorTest$TestService.noArg()([])", key);
+        "com.bing.cache.util.CacheKeyGeneratorTest$TestService.noArg()()", key);
   }
 
   /**
@@ -261,7 +264,8 @@ class CacheKeyGeneratorTest {
   /**
    * 测试基本类型数组参数不抛 ClassCastException.
    *
-   * <p>数组输出形式为 {@code [N:1, N:2, N:3]}（无 A: 前缀），与 List 一致。</p>
+   * <p>数组作为单参数走 {@code serializeSingle}，输出 {@code Sg[[N:1, N:2, N:3]]}。
+   * 内层 {@code [N:1, N:2, N:3]} 是数组的元素序列化，外层 {@code Sg[...]} 标识单值选取。</p>
    */
   @Test
   void testPrimitiveArrayArg() throws NoSuchMethodException {
@@ -271,7 +275,7 @@ class CacheKeyGeneratorTest {
 
     String key = generator.generate(method, args, null, "", "", "", new int[]{}, "");
 
-    assertTrue(key.contains("[[N:1, N:2, N:3]]"));
+    assertTrue(key.contains("(Sg[[N:1, N:2, N:3]])"));
   }
 
   /**
@@ -324,7 +328,7 @@ class CacheKeyGeneratorTest {
 
     String key = generator.generate(method, args, null, "", "user", "", new int[]{}, "#id");
 
-    assertEquals("user(N:1)", key);
+    assertEquals("user(Sg[N:1])", key);
   }
 
   /**
@@ -338,7 +342,7 @@ class CacheKeyGeneratorTest {
 
     String key = generator.generate(method, args, null, "", "user", "", new int[]{}, "#user.id");
 
-    assertEquals("user(N:42)", key);
+    assertEquals("user(Sg[N:42])", key);
   }
 
   /**
@@ -353,7 +357,7 @@ class CacheKeyGeneratorTest {
     String key = generator.generate(method, args, null, "", "cache", "", new int[]{},
         "#a + ':' + #b + ':' + #c");
 
-    assertEquals("cache(S:a:2:3)", key);
+    assertEquals("cache(Sg[S:a:2:3])", key);
   }
 
   /**
@@ -367,8 +371,8 @@ class CacheKeyGeneratorTest {
     String keyP0 = generator.generate(method, args, null, "", "user", "", new int[]{}, "#p0");
     String keyA0 = generator.generate(method, args, null, "", "user", "", new int[]{}, "#a0");
 
-    assertEquals("user(N:99)", keyP0);
-    assertEquals("user(N:99)", keyA0);
+    assertEquals("user(Sg[N:99])", keyP0);
+    assertEquals("user(Sg[N:99])", keyA0);
   }
 
   /**
@@ -382,7 +386,7 @@ class CacheKeyGeneratorTest {
     String key = generator.generate(method, args, null, "", "cache", "", new int[]{},
         "#root.methodName + ':' + #id");
 
-    assertEquals("cache(S:findById:1)", key);
+    assertEquals("cache(Sg[S:findById:1])", key);
   }
 
   /**
@@ -396,7 +400,7 @@ class CacheKeyGeneratorTest {
 
     String key = generator.generate(method, args, null, "", "user", "", new int[]{}, "#user.id");
 
-    assertEquals("user(null)", key);
+    assertEquals("user(Sg[null])", key);
   }
 
   /**
@@ -447,7 +451,7 @@ class CacheKeyGeneratorTest {
     String key = generator.generate(method, args, null, "", "cache", "",
         new int[]{0, 2}, "#c");
 
-    assertEquals("cache(N:3)", key);
+    assertEquals("cache(Sg[N:3])", key);
   }
 
   /**
@@ -545,10 +549,108 @@ class CacheKeyGeneratorTest {
     String keyFromString = generator.generate(stringMethod, new Object[]{"1"}, null,
         "", "user", "", new int[]{}, "");
 
-    assertEquals("user([N:1])", keyFromInt);
+    assertEquals("user(Sg[N:1])", keyFromInt);
     assertEquals(keyFromInt, keyFromLong);
-    assertEquals("user([S:1])", keyFromString);
+    assertEquals("user(Sg[S:1])", keyFromString);
     assertNotEquals(keyFromInt, keyFromString);
+  }
+
+  /**
+   * 测试 argSpel 多值场景与 argIndexes/默认方式产出一致.
+   *
+   * <p>argSpel 返回 List 时，serializeArg 对 List 逐元素加类型前缀，
+   * 与 argIndexes/默认方式通过 serializeArgs 拼接的形式一致。
+   * 这是 SpEL 路径向类型前缀方案靠拢的关键验证。</p>
+   */
+  @Test
+  void testSpelListMatchesArgIndexesAndDefault() throws NoSuchMethodException {
+    Method method = TestService.class.getMethod("multiArg", String.class, Integer.class,
+        Long.class);
+    Object[] args = {"a", 2, 3L};
+
+    String keyByArgIndexes = generator.generate(method, args, null, "", "cache", "",
+        new int[]{0, 1, 2}, "");
+    String keyByDefault = generator.generate(method, args, null, "", "cache", "",
+        new int[]{}, "");
+    String keyBySpel = generator.generate(method, args, null, "", "cache", "",
+        new int[]{}, "{#root.args[0], #root.args[1], #root.args[2]}");
+
+    assertEquals("cache([S:a, N:2, N:3])", keyByArgIndexes);
+    assertEquals(keyByArgIndexes, keyByDefault);
+    assertEquals(keyByArgIndexes, keyBySpel);
+  }
+
+  /**
+   * 测试 argSpel 单值场景与 argIndexes/默认方式产出一致.
+   *
+   * <p>Sg 方案：单值选取(argSpel / argIndexes={0} / 单参数默认)都输出 {@code Sg[...]}。
+   * 三种方式都生成 {@code user(Sg[N:123])}。</p>
+   */
+  @Test
+  void testSpelSingleValueMatchesArgIndexesAndDefault() throws NoSuchMethodException {
+    Method method = TestService.class.getMethod("findById", Long.class);
+    Object[] args = {123L};
+
+    String keyBySpel = generator.generate(method, args, null, "", "user", "",
+        new int[]{}, "#id");
+    String keyByArgIndexes = generator.generate(method, args, null, "", "user", "",
+        new int[]{0}, "");
+    String keyByDefault = generator.generate(method, args, null, "", "user", "",
+        new int[]{}, "");
+
+    assertEquals("user(Sg[N:123])", keyBySpel);
+    assertEquals(keyBySpel, keyByArgIndexes);
+    assertEquals(keyBySpel, keyByDefault);
+  }
+
+  /**
+   * 测试 argSpel 多值({@code {...}})与 argIndexes/默认多参数产出一致.
+   *
+   * <p>Sg 方案：argSpel 以 {@code {}} 形式表示多值选取，与 argIndexes/默认多参数
+   * 都输出 {@code [N:1, N:2]}（不带 Sg）。</p>
+   */
+  @Test
+  void testSpelMultiValueMatchesArgIndexesAndDefault() throws NoSuchMethodException {
+    Method method = TestService.class.getMethod("multiArg", String.class, Integer.class,
+        Long.class);
+    Object[] args = {"a", 2, 3L};
+
+    String keyBySpel = generator.generate(method, args, null, "", "cache", "",
+        new int[]{}, "{#root.args[0], #root.args[1], #root.args[2]}");
+    String keyByArgIndexes = generator.generate(method, args, null, "", "cache", "",
+        new int[]{0, 1, 2}, "");
+    String keyByDefault = generator.generate(method, args, null, "", "cache", "",
+        new int[]{}, "");
+
+    assertEquals("cache([S:a, N:2, N:3])", keyBySpel);
+    assertEquals(keyBySpel, keyByArgIndexes);
+    assertEquals(keyBySpel, keyByDefault);
+  }
+
+  /**
+   * 测试单值 List 参数与多参数不碰撞.
+   *
+   * <p>Sg 方案核心目标：单值 List 参数输出 {@code Sg[N:1, N:2]}，
+   * 多参数输出 {@code [N:1, N:2]}，通过 {@code Sg[} vs {@code [} 区分，不碰撞。</p>
+   */
+  @Test
+  void testSingleListArgDoesNotCollideWithMultiArgs() throws NoSuchMethodException {
+    // 单参数 List<Integer>
+    Method listMethod = TestService.class.getMethod("findByInts", int[].class);
+    int[] ints = {1, 2};
+    String keyFromList = generator.generate(listMethod, new Object[]{ints}, null,
+        "", "cache", "", new int[]{}, "");
+
+    // 两参数 (Integer, Integer) - 用 multiArg 模拟
+    Method multiMethod = TestService.class.getMethod("multiArg", String.class, Integer.class,
+        Long.class);
+    String keyFromMulti = generator.generate(multiMethod, new Object[]{"x", 1, 2L}, null,
+        "", "cache", "", new int[]{1, 2}, "");
+
+    // 两者形式不同，不碰撞
+    assertNotEquals(keyFromList, keyFromMulti);
+    assertTrue(keyFromList.contains("Sg["));
+    assertTrue(keyFromMulti.contains("([") && !keyFromMulti.contains("Sg["));
   }
 
   // ==================== 保留名校验测试 ====================
