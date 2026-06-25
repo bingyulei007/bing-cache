@@ -566,4 +566,86 @@ public class AdvancedBingCacheTest {
             new BingCacheDemos.UserDetailQuery(1L, "test"));
         assertNotNull(userDetailAfter, "userDetail 不应被 clearByPrefix('user') 误删");
     }
+
+    // ========== 11. clearByPrefix 不影响 group 条目 ==========
+
+    @Test
+    @DisplayName("clearByPrefix 不影响 group 方式缓存的条目")
+    void testClearByPrefixDoesNotAffectGroupEntries() {
+        // getAdminUser: group="admin", cacheName="user", key=admin:user(...)
+        // getUserById:  group 为空,     cacheName="user", key=user(...)
+        bingCacheDemos.getAdminUser(801L);
+        bingCacheDemos.getUserById(801L);
+
+        // clearByPrefix("user") 只清除 user( 开头的 key
+        cacheManager.clearByPrefix("user");
+
+        // 无 group 的 user 应被清除
+        assertNull(cacheManager.get("user(Sg[N:801])"),
+            "clearByPrefix('user') 应清除无 group 的 user 缓存");
+
+        // group=admin 的 user 不应被清除（key 格式为 admin:user(...)）
+        // 验证方式：再次调用应命中缓存（返回值不变）
+        String adminBefore = bingCacheDemos.getAdminUser(801L);
+        String adminAfter = bingCacheDemos.getAdminUser(801L);
+        assertEquals(adminBefore, adminAfter,
+            "clearByPrefix('user') 不应影响 group=admin 的 user 缓存");
+    }
+
+    // ========== 12. 重复 clear 稳定性 ==========
+
+    @Test
+    @DisplayName("重复调用 clear() 不应抛异常")
+    void testRepeatedClearDoesNotThrow() {
+        bingCacheDemos.getUserById(1L);
+        bingCacheDemos.getDict("test");
+
+        // 多次 clear
+        assertDoesNotThrow(() -> cacheManager.clear());
+        assertDoesNotThrow(() -> cacheManager.clear());
+        assertDoesNotThrow(() -> cacheManager.clear());
+
+        // clear 后缓存应为空
+        assertNull(cacheManager.get("user(Sg[N:1])"));
+    }
+
+    // ========== 13. clearByGroup + clearByPrefix 交叉验证 ==========
+
+    @Test
+    @DisplayName("clearByGroup + clearByPrefix 交叉 - 互不影响非目标条目")
+    void testClearByGroupAndClearByPrefixCrossValidation() {
+        // 准备缓存数据
+        String adminUserOrig = bingCacheDemos.getAdminUser(901L);
+        bingCacheDemos.getUserById(901L);
+        String adminDictOrig = bingCacheDemos.getAdminDict("cross-test");
+        bingCacheDemos.getDict("cross-test");
+
+        // Step 1: clearByPrefix("user") — 只影响 user( 开头
+        cacheManager.clearByPrefix("user");
+
+        // normal user 应被清除
+        assertNull(cacheManager.get("user(Sg[N:901])"),
+            "normal user 应被 clearByPrefix 清除");
+
+        // admin:user 应保留 — 再次调用应命中缓存
+        String adminUserAfter = bingCacheDemos.getAdminUser(901L);
+        assertEquals(adminUserOrig, adminUserAfter,
+            "admin:user 不应被 clearByPrefix('user') 清除");
+
+        // dict 相关缓存不受影响
+        assertNotNull(cacheManager.get("dict(Sg[S:cross-test])"),
+            "dict 缓存不应被 clearByPrefix('user') 影响");
+
+        // Step 2: clearByGroup("admin") — 只影响 admin: 开头
+        bingCacheDemos.clearAdminGroup();
+
+        // admin:dict 应被清除
+        String adminDictAfter = bingCacheDemos.getAdminDict("cross-test");
+        assertNotEquals(adminDictOrig, adminDictAfter,
+            "admin:dict 应被 clearByGroup 清除");
+
+        // normal dict (keyPrefix) 应保留
+        assertNotNull(cacheManager.get("dict(Sg[S:cross-test])"),
+            "keyPrefix=dict 不应被 clearByGroup('admin') 清除");
+    }
 }

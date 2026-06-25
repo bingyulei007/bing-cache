@@ -197,4 +197,96 @@ public class GroupAndAdvancedTest {
                 "cacheName 以 '__group__:' 开头是保留前缀，应抛 IllegalStateException");
         }
     }
+
+    // ========== 6. clearByGroup L1+L2 双层清除验证 ==========
+
+    @Test
+    @DisplayName("clearByGroup 清除后重新执行 — L1 和 L2 均被清除")
+    void testClearByGroupClearsBothL1AndL2() {
+        Long userId = 701L;
+        // 准备 admin 分组缓存
+        String before = bingCacheDemos.getAdminUser(userId);
+        String dictBefore = bingCacheDemos.getAdminDict("clear-l2-test");
+
+        // 清除 admin 分组
+        bingCacheDemos.clearAdminGroup();
+
+        // 验证 admin:user 被清除 — 再次调用应重新执行（L1 miss → L2 miss → 方法重执行）
+        String after = bingCacheDemos.getAdminUser(userId);
+        assertNotEquals(before, after, "clearByGroup 应清除 admin:user 缓存");
+
+        // 验证 admin:dict 也被清除
+        String dictAfter = bingCacheDemos.getAdminDict("clear-l2-test");
+        assertNotEquals(dictBefore, dictAfter, "clearByGroup 应清除 admin:dict 缓存");
+
+        // 验证清除后重新缓存正常
+        String cached = bingCacheDemos.getAdminUser(userId);
+        assertEquals(after, cached, "清除重建后应命中缓存");
+    }
+
+    // ========== 7. group 与 keyPrefix 隔离 ==========
+
+    @Test
+    @DisplayName("clearByGroup 不影响 keyPrefix 方式缓存的条目")
+    void testClearByGroupDoesNotAffectKeyPrefixEntries() throws InterruptedException {
+        // getDict 使用 keyPrefix="dict"，无 group
+        String dict = bingCacheDemos.getDict("group-isolation-test");
+        // getAdminDict 使用 group="admin", cacheName="dict"
+        String adminDict = bingCacheDemos.getAdminDict("group-isolation-test");
+        Thread.sleep(2);
+
+        // 清除 admin 分组
+        bingCacheDemos.clearAdminGroup();
+
+        // admin:dict 应被清除 → 重新执行
+        String adminDictAfter = bingCacheDemos.getAdminDict("group-isolation-test");
+        assertNotEquals(adminDict, adminDictAfter, "admin:dict 应被 clearByGroup 清除");
+
+        // 无 group 的 dict(keyPrefix) 应保留 → 命中缓存
+        String dictAfter = bingCacheDemos.getDict("group-isolation-test");
+        assertEquals(dict, dictAfter, "keyPrefix=dict 的缓存不应被 clearByGroup 清除");
+    }
+
+    // ========== 8. 无参方法缓存 ==========
+
+    @Test
+    @DisplayName("无参方法 getUserStats - 缓存命中")
+    void testNoArgMethodCacheHit() {
+        String first = bingCacheDemos.getUserStats();
+        String second = bingCacheDemos.getUserStats();
+
+        assertEquals(first, second, "无参方法应命中缓存");
+        assertTrue(first.contains("Stats"));
+    }
+
+    // ========== 9. 清除空 group 稳定性 ==========
+
+    @Test
+    @DisplayName("清除不存在/空的 group - 不应抛异常")
+    void testClearNonExistentGroupDoesNotThrow() {
+        // portal 分组下无缓存数据
+        assertDoesNotThrow(() -> bingCacheDemos.clearPortalGroup(),
+            "清除空 group 不应抛异常");
+    }
+
+    // ========== 10. 全局清空后 group 缓存重建 ==========
+
+    @Test
+    @DisplayName("全局清空后 group 缓存可正常重建")
+    void testGroupCacheRebuildAfterGlobalClear() {
+        Long userId = 801L;
+
+        // 准备 group 缓存
+        String first = bingCacheDemos.getAdminUser(userId);
+        // 全局清空
+        bingCacheDemos.clearAll();
+
+        // 重建 — 应重新执行方法
+        String rebuilt = bingCacheDemos.getAdminUser(userId);
+        assertNotEquals(first, rebuilt, "全局清空后应重新执行");
+
+        // 再次获取 — 应命中新缓存
+        String cached = bingCacheDemos.getAdminUser(userId);
+        assertEquals(rebuilt, cached, "重建后应命中缓存");
+    }
 }

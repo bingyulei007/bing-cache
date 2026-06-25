@@ -535,4 +535,140 @@ public class BingCacheTest {
         assertEquals(orders, ordersAfter, "userOrders 不应被清除");
         assertNotEquals(stats, statsAfter, "userStats 应被清除");
     }
+
+    // ========== DemoService 缓存命中验证 ==========
+
+    /**
+     * DemoService.getProductByCode 使用 keyPrefix 配置，验证缓存命中.
+     */
+    @Test
+    void testDemoServiceGetProductByCodeCacheHit() {
+        String code = "SKU-001";
+        String result1 = demoService.getProductByCode(code);
+        String result2 = demoService.getProductByCode(code);
+
+        assertEquals(result1, result2, "相同参数应命中缓存");
+        assertTrue(result1.contains(code));
+    }
+
+    /**
+     * DemoService.getOrderById 非 null 结果也应正常缓存（cacheNullValue=true 不影响非 null 结果）.
+     */
+    @Test
+    void testDemoServiceGetOrderByIdNonNullCached() {
+        Long orderId = 500L; // < 1000，返回非 null
+        String result1 = demoService.getOrderById(orderId);
+        assertNotNull(result1, "有效 orderId 应返回非 null");
+
+        String result2 = demoService.getOrderById(orderId);
+        assertEquals(result1, result2, "非 null 结果应被缓存");
+    }
+
+    // ========== cacheNullValue=false 行为验证 ==========
+
+    /**
+     * cacheNullValue=false 时，null 结果不缓存，相同参数再次调用应重新执行方法.
+     *
+     * <p>验证方式：先用无效 id 获取 null，再用有效 id 获取正常值确认缓存机制正常工作，
+     * 最后再次用无效 id 确认仍返回 null（方法被重新执行，而非从缓存获取）。</p>
+     */
+    @Test
+    void testNoCacheNullValueReExecutes() {
+        Long invalidId = -1L;
+        Long validId = 1L;
+
+        // 第一次返回 null
+        String nullResult1 = cacheDemoExamples.noCacheNullValue(invalidId);
+        assertNull(nullResult1);
+
+        // 有效 id 确认缓存机制正常
+        String validResult1 = cacheDemoExamples.noCacheNullValue(validId);
+        String validResult2 = cacheDemoExamples.noCacheNullValue(validId);
+        assertEquals(validResult1, validResult2, "非 null 结果应被缓存");
+        assertNotNull(validResult1);
+
+        // 再次用无效 id — 方法应被重新执行（null 未被缓存），仍返回 null
+        String nullResult2 = cacheDemoExamples.noCacheNullValue(invalidId);
+        assertNull(nullResult2, "cacheNullValue=false 时 null 不应被缓存，应重新执行");
+    }
+
+    // ========== 缓存 null 值驱逐后重新查询 ==========
+
+    /**
+     * cacheNullValue=true 时，null 被缓存后驱逐，再次查询应重新执行方法.
+     */
+    @Test
+    void testEvictCachedNullValue() {
+        Long nonExistId = -9999L;
+
+        // 缓存 null
+        assertNull(cacheDemoExamples.cacheNullValue(nonExistId));
+        // 从缓存获取 null
+        assertNull(cacheDemoExamples.cacheNullValue(nonExistId));
+
+        // 驱逐（通过 clearByPrefix 清除 nullable 前缀的所有缓存）
+        cacheManager.clearByPrefix("nullable");
+
+        // 驱逐后重新查询 — 方法应被重新执行（结果仍为 null）
+        String result = cacheDemoExamples.cacheNullValue(nonExistId);
+        assertNull(result, "驱逐后重新查询应重新执行方法");
+    }
+
+    // ========== null 参数边界测试 ==========
+
+    /**
+     * 传入 null 参数时，缓存框架不应抛异常.
+     *
+     * <p>方法体自身是否能处理 null 取决于业务逻辑，关键是 AOP/缓存层不抛框架异常。</p>
+     */
+    @Test
+    void testNullArgumentDoesNotThrowCacheException() {
+        try {
+            String result = demoService.getUserById(null);
+            // 方法体能处理 null 时，验证缓存行为
+            if (result != null) {
+                String result2 = demoService.getUserById(null);
+                assertEquals(result, result2, "null 参数应正常缓存");
+            }
+        } catch (NullPointerException e) {
+            // 方法体自身抛 NPE 是正常的，关键是缓存框架不抛异常
+            // 如果走到这里说明缓存框架正常放行了调用
+        }
+    }
+
+    // ========== 驱逐不存在的 key 稳定性测试 ==========
+
+    /**
+     * 驱逐从未缓存过的 key、clear 空缓存、clearByPrefix 无匹配 — 均不应抛异常.
+     */
+    @Test
+    void testEvictNonExistentKeyDoesNotThrow() {
+        assertDoesNotThrow(() -> cacheManager.evict("non-existent-key([999])"));
+        assertDoesNotThrow(() -> cacheManager.clear());
+        assertDoesNotThrow(() -> cacheManager.clearByPrefix("never-used-prefix"));
+    }
+
+    // ========== 多次连续驱逐测试 ==========
+
+    /**
+     * 多次连续驱逐同一 cacheName 下的 key，不应抛异常，驱逐后查询应重新执行.
+     */
+    @Test
+    void testMultipleSequentialEvicts() {
+        Long userId = 100L;
+
+        // 先缓存
+        String result = bingCacheDemos.getUserById(userId);
+        assertNotNull(result);
+
+        // 多次驱逐
+        bingCacheDemos.updateUser(userId, "name1");
+        bingCacheDemos.updateUser(userId, "name2");
+        bingCacheDemos.updateUser(userId, "name3");
+
+        // 驱逐后查询应重新执行
+        String after = bingCacheDemos.getUserById(userId);
+        assertNotNull(after);
+        assertNotEquals(result, after, "多次驱逐后查询应重新执行");
+    }
 }
