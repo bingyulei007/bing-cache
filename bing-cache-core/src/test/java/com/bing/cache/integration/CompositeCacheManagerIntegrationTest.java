@@ -40,6 +40,8 @@ import org.springframework.data.redis.listener.adapter.MessageListenerAdapter;
 import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSerializer;
 import org.springframework.data.redis.serializer.StringRedisSerializer;
 
+import java.time.Duration;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
@@ -182,23 +184,27 @@ class CompositeCacheManagerIntegrationTest {
     RedisMessageListenerContainer container = new RedisMessageListenerContainer();
     container.setConnectionFactory(connectionFactory2);
     container.addMessageListener(adapter, new PatternTopic(CHANNEL_NAME));
-    container.afterPropertiesSet();
+    try {
+      container.afterPropertiesSet();
+      container.start();
+      waitUntil(() -> container.isRunning(), Duration.ofSeconds(5));
 
-    // Both instances write data
-    cacheManager.put("shared:key", "value1", 60);
-    l1Instance2.put("shared:key", "value1", 0); // instance 2 also caches locally
+      // Both instances write data
+      cacheManager.put("shared:key", "value1", 60);
+      l1Instance2.put("shared:key", "value1", 0); // instance 2 also caches locally
 
-    // Instance 1 evicts the key (should publish to Redis)
-    cacheManager.evict("shared:key");
+      // Instance 1 evicts the key (should publish to Redis)
+      cacheManager.evict("shared:key");
 
-    // Wait for Pub/Sub delivery
-    Thread.sleep(500);
+      // Wait for Pub/Sub delivery
+      waitUntil(() -> l1Instance2.get("shared:key") == null, Duration.ofSeconds(5));
 
-    // Instance 2's L1 should be invalidated
-    assertNull(l1Instance2.get("shared:key"));
-
-    container.destroy();
-    connectionFactory2.destroy();
+      // Instance 2's L1 should be invalidated
+      assertNull(l1Instance2.get("shared:key"));
+    } finally {
+      container.destroy();
+      connectionFactory2.destroy();
+    }
   }
 
   @Test
@@ -219,9 +225,28 @@ class CompositeCacheManagerIntegrationTest {
     throw new AssertionError("Expected <" + expected + "> but was <" + actual + ">");
   }
 
-  private void assertNull(Object actual) {
-    if (actual != null) {
-      throw new AssertionError("Expected null but was <" + actual + ">");
+
+  private void waitUntil(BooleanSupplier condition, Duration timeout) throws InterruptedException {
+    long deadline = System.nanoTime() + timeout.toNanos();
+    AssertionError lastFailure = null;
+    while (System.nanoTime() < deadline) {
+      try {
+        if (condition.getAsBoolean()) {
+          return;
+        }
+      } catch (AssertionError e) {
+        lastFailure = e;
+      }
+      Thread.sleep(50);
     }
+    if (lastFailure != null) {
+      throw lastFailure;
+    }
+    throw new AssertionError("Condition was not met within " + timeout);
+  }
+
+  @FunctionalInterface
+  private interface BooleanSupplier {
+    boolean getAsBoolean();
   }
 }

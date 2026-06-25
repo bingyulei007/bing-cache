@@ -51,9 +51,11 @@ public class CacheReconciliationService implements SmartLifecycle {
 
   private final Map<String, Long> lastKnownVersions = new ConcurrentHashMap<>();
 
-  private volatile long lastKnownAllVersion = 0L;
+  private volatile Long lastKnownAllVersion;
 
   private final Map<String, Long> lastKnownGroupVersions = new ConcurrentHashMap<>();
+
+  private volatile boolean initialized = false;
 
   private ScheduledExecutorService scheduler;
 
@@ -124,12 +126,12 @@ public class CacheReconciliationService implements SmartLifecycle {
     try {
       // 先检查全局版本号
       long currentAllVersion = versionStore.getAllVersion();
-      if (currentAllVersion != lastKnownAllVersion) {
-        if (lastKnownAllVersion != 0L) {
-          LOG.info("Bing Cache: Global version changed ({} -> {}), clearing all L1 cache",
-              lastKnownAllVersion, currentAllVersion);
-          l1CacheManager.clear();
-        }
+      if (lastKnownAllVersion == null) {
+        lastKnownAllVersion = currentAllVersion;
+      } else if (currentAllVersion != lastKnownAllVersion) {
+        LOG.info("Bing Cache: Global version changed ({} -> {}), clearing all L1 cache",
+            lastKnownAllVersion, currentAllVersion);
+        l1CacheManager.clear();
         lastKnownAllVersion = currentAllVersion;
         // 全局版本变化时，各 cacheName 的版本号也需要刷新
         refreshAllKnownVersions();
@@ -157,6 +159,7 @@ public class CacheReconciliationService implements SmartLifecycle {
           checkGroupVersion(group);
         }
       }
+      initialized = true;
     } catch (Exception e) {
       LOG.error("Bing Cache: Reconciliation failed", e);
     }
@@ -172,7 +175,11 @@ public class CacheReconciliationService implements SmartLifecycle {
     Long lastVersion = lastKnownVersions.get(cacheName);
 
     if (lastVersion == null) {
-      // 首次发现此 cacheName，记录当前版本号
+      if (initialized) {
+        // 首次发现此 cacheName，说明本实例上次对账后其他实例已经执行过前缀清理。
+        // 为避免保留该前缀下的旧 L1 数据，先清理再记录版本号。
+        l1CacheManager.clearByPrefix(cacheName);
+      }
       lastKnownVersions.put(cacheName, currentVersion);
       return;
     }
@@ -194,6 +201,11 @@ public class CacheReconciliationService implements SmartLifecycle {
     long currentVersion = versionStore.getGroupVersion(group);
     Long lastVersion = lastKnownGroupVersions.get(group);
     if (lastVersion == null) {
+      if (initialized) {
+        // 首次发现此 group，说明本实例上次对账后其他实例已经执行过 group 清理。
+        // 为避免保留该 group 下的旧 L1 数据，先清理再记录版本号。
+        l1CacheManager.clearByGroup(group);
+      }
       lastKnownGroupVersions.put(group, currentVersion);
       return;
     }

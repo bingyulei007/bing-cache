@@ -244,6 +244,56 @@ class CacheReconciliationServiceTest {
   }
 
   /**
+   * 测试全局版本号从未创建状态（0）递增到 1 时清空所有 L1 缓存.
+   */
+  @Test
+  void testGlobalVersionFromZeroToOneClearsAllL1() {
+    when(versionStore.getAllVersion()).thenReturn(0L);
+    when(versionStore.getActiveCacheNames()).thenReturn(Optional.of(Set.of()));
+    when(versionStore.getActiveGroups()).thenReturn(Optional.of(Set.of()));
+    service.reconcile();
+
+    when(versionStore.getAllVersion()).thenReturn(1L);
+    service.reconcile();
+
+    verify(l1CacheManager).clear();
+  }
+
+  /**
+   * 测试首次对账后新出现的 cacheName 版本号会按前缀清除 L1 缓存.
+   */
+  @Test
+  void testNewCacheNameAfterInitialReconciliationClearsByPrefix() {
+    when(versionStore.getAllVersion()).thenReturn(0L);
+    when(versionStore.getActiveCacheNames()).thenReturn(Optional.of(Set.of()));
+    when(versionStore.getActiveGroups()).thenReturn(Optional.of(Set.of()));
+    service.reconcile();
+
+    when(versionStore.getActiveCacheNames()).thenReturn(Optional.of(Set.of("user")));
+    when(versionStore.getVersion("user")).thenReturn(1L);
+    service.reconcile();
+
+    verify(l1CacheManager).clearByPrefix("user");
+  }
+
+  /**
+   * 测试首次对账后新出现的 group 版本号会按 group 清除 L1 缓存.
+   */
+  @Test
+  void testNewGroupAfterInitialReconciliationClearsByGroup() {
+    when(versionStore.getAllVersion()).thenReturn(0L);
+    when(versionStore.getActiveCacheNames()).thenReturn(Optional.of(Set.of()));
+    when(versionStore.getActiveGroups()).thenReturn(Optional.of(Set.of()));
+    service.reconcile();
+
+    when(versionStore.getActiveGroups()).thenReturn(Optional.of(Set.of("user")));
+    when(versionStore.getGroupVersion("user")).thenReturn(1L);
+    service.reconcile();
+
+    verify(l1CacheManager).clearByGroup("user");
+  }
+
+  /**
    * 测试生命周期：start/stop.
    */
   @Test
