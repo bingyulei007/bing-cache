@@ -152,8 +152,7 @@ class BingCacheAutoConfigurationTest {
    */
   @Test
   void testCacheInvalidationMessageListenerAdapterInitialized() {
-    BingCacheAutoConfiguration.RedisConfiguration config =
-        new BingCacheAutoConfiguration.RedisConfiguration();
+    BingCacheAutoConfiguration config = new BingCacheAutoConfiguration();
     CacheInvalidationListener listener = new CacheInvalidationListener(
         Mockito.mock(CacheManager.class), "self-instance");
 

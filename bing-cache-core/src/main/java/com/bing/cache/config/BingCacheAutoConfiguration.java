@@ -143,7 +143,7 @@ public class BingCacheAutoConfiguration {
   @ConditionalOnBean(RedisConnectionFactory.class)
   @ConditionalOnProperty(prefix = "bing.cache.redis", name = "enabled",
       havingValue = "true", matchIfMissing = true)
-  public CacheManager compositeCacheManager(
+  public CompositeCacheManager compositeCacheManager(
       StringRedisTemplate stringRedisTemplate,
       RedisTemplate<String, Object> bingCacheRedisTemplate,
       BingCacheProperties properties,
@@ -198,6 +198,101 @@ public class BingCacheAutoConfiguration {
             : "");
 
     return composite;
+  }
+
+  /**
+   * 注册缓存失效消息监听器.
+   *
+   * <p>该 bean 与 {@link #compositeCacheManager(StringRedisTemplate, RedisTemplate,
+   * BingCacheProperties, String, ObjectProvider)} 位于同一配置类层级，避免内部
+   * {@code RedisConfiguration} 在条件评估时看不到当前自动配置中稍后注册的
+   * {@link CompositeCacheManager} bean，导致多实例 Pub/Sub 监听器缺失。</p>
+   *
+   * @param cacheManager        L1+L2 组合缓存管理器
+   * @param bingCacheInstanceId 当前实例唯一标识
+   * @return CacheInvalidationListener 实例
+   */
+  @Bean
+  @ConditionalOnBean(CompositeCacheManager.class)
+  @ConditionalOnMissingBean
+  public CacheInvalidationListener cacheInvalidationListener(
+      CompositeCacheManager cacheManager,
+      String bingCacheInstanceId) {
+    return new CacheInvalidationListener(cacheManager.getL1CacheManager(),
+        bingCacheInstanceId);
+  }
+
+  /**
+   * 注册 Redis Pub/Sub 消息监听适配器.
+   *
+   * <p>显式调用 {@link MessageListenerAdapter#afterPropertiesSet()} 初始化内部
+   * MethodInvoker，避免容器收到消息时因 invoker 未初始化而抛出 NPE。</p>
+   *
+   * @param listener 缓存失效监听器
+   * @return 已初始化的 MessageListenerAdapter
+   */
+  @Bean("bingCacheInvalidationMessageListenerAdapter")
+  @ConditionalOnBean(CacheInvalidationListener.class)
+  @ConditionalOnMissingBean(name = "bingCacheInvalidationMessageListenerAdapter")
+  public MessageListenerAdapter cacheInvalidationMessageListenerAdapter(
+      CacheInvalidationListener listener) {
+    MessageListenerAdapter adapter = new MessageListenerAdapter(listener, "handleMessage");
+    adapter.afterPropertiesSet();
+    return adapter;
+  }
+
+  /**
+   * 注册 Redis Pub/Sub 消息监听容器.
+   *
+   * <p>订阅缓存失效频道，收到消息后调用
+   * {@link CacheInvalidationListener#handleMessage(String)} 处理。</p>
+   *
+   * @param connectionFactory Redis 连接工厂
+   * @param properties        缓存配置属性
+   * @param adapter           缓存失效消息监听适配器
+   * @return RedisMessageListenerContainer 实例
+   */
+  @Bean("bingCacheInvalidationListenerContainer")
+  @ConditionalOnBean(CacheInvalidationListener.class)
+  @ConditionalOnMissingBean(name = "bingCacheInvalidationListenerContainer")
+  public RedisMessageListenerContainer bingCacheInvalidationListenerContainer(
+      RedisConnectionFactory connectionFactory,
+      BingCacheProperties properties,
+      @Qualifier("bingCacheInvalidationMessageListenerAdapter") MessageListenerAdapter adapter) {
+    RedisMessageListenerContainer container = new RedisMessageListenerContainer();
+    container.setConnectionFactory(connectionFactory);
+    container.addMessageListener(adapter,
+        new PatternTopic(properties.getRedis().getChannelName()));
+    LOG.info("Bing Cache: Redis Pub/Sub listener registered on channel: {}",
+        properties.getRedis().getChannelName());
+    return container;
+  }
+
+  /**
+   * 注册版本对账服务.
+   *
+   * <p>仅在 Redis 可用且对账启用、且 {@link CompositeCacheManager} 存在时注册。
+   * 服务随 Spring 容器生命周期自动启停。</p>
+   *
+   * @param versionStore  版本号存储（共享 bean）
+   * @param cacheManager  L1+L2 组合缓存管理器
+   * @param properties    缓存配置属性
+   * @return CacheReconciliationService 实例
+   */
+  @Bean
+  @ConditionalOnBean(CompositeCacheManager.class)
+  @ConditionalOnProperty(prefix = "bing.cache.reconciliation", name = "enabled",
+      havingValue = "true", matchIfMissing = true)
+  @ConditionalOnMissingBean
+  public CacheReconciliationService cacheReconciliationService(
+      CacheVersionStore versionStore,
+      CompositeCacheManager cacheManager,
+      BingCacheProperties properties) {
+    CacheReconciliationService service = new CacheReconciliationService(
+        versionStore, cacheManager.getL1CacheManager(), properties.getReconciliation().getInterval());
+    LOG.info("Bing Cache: Reconciliation service configured, interval={}s",
+        properties.getReconciliation().getInterval());
+    return service;
   }
 
   /**
@@ -299,120 +394,6 @@ public class BingCacheAutoConfiguration {
       template.setHashValueSerializer(new GenericJackson2JsonRedisSerializer());
       template.afterPropertiesSet();
       return template;
-    }
-
-    /**
-     * 注册缓存失效消息监听器.
-     *
-     * <p>仅在 {@link CompositeCacheManager} 存在时注册（即 L1+L2 二级缓存模式）。
-     * 用户自定义 {@link CacheManager} 时不创建此 bean，避免把用户实现当作 L1 调用
-     * {@code evict/clear/clearByPrefix} 而行为不符。</p>
-     *
-     * @param cacheManager 缓存管理器（CompositeCacheManager 实例）
-     * @return CacheInvalidationListener 实例
-     */
-    @Bean
-    @ConditionalOnBean(CompositeCacheManager.class)
-    @ConditionalOnMissingBean
-    public CacheInvalidationListener cacheInvalidationListener(CacheManager cacheManager,
-        String bingCacheInstanceId) {
-      CacheManager l1;
-      if (cacheManager instanceof CompositeCacheManager composite) {
-        l1 = composite.getL1CacheManager();
-      } else {
-        // 理论不可达：@ConditionalOnBean(CompositeCacheManager.class) 已保证
-        throw new IllegalStateException(
-            "CacheInvalidationListener requires CompositeCacheManager, but got: "
-                + (cacheManager == null ? "null" : cacheManager.getClass().getName()));
-      }
-      return new CacheInvalidationListener(l1, bingCacheInstanceId);
-    }
-
-    /**
-     * 注册 Redis Pub/Sub 消息监听适配器.
-     *
-     * <p>显式调用 {@link MessageListenerAdapter#afterPropertiesSet()} 初始化内部
-     * MethodInvoker，避免容器收到消息时因 invoker 未初始化而抛出 NPE。</p>
-     *
-     * <p>仅在 {@link CacheInvalidationListener} 存在时注册（即 L1+L2 二级缓存模式）。</p>
-     *
-     * @param listener 缓存失效监听器
-     * @return 已初始化的 MessageListenerAdapter
-     */
-    @Bean("bingCacheInvalidationMessageListenerAdapter")
-    @ConditionalOnBean(CacheInvalidationListener.class)
-    @ConditionalOnMissingBean(name = "bingCacheInvalidationMessageListenerAdapter")
-    public MessageListenerAdapter cacheInvalidationMessageListenerAdapter(
-        CacheInvalidationListener listener) {
-      MessageListenerAdapter adapter = new MessageListenerAdapter(listener, "handleMessage");
-      adapter.afterPropertiesSet();
-      return adapter;
-    }
-
-    /**
-     * 注册 Redis Pub/Sub 消息监听容器.
-     *
-     * <p>订阅缓存失效频道，收到消息后调用
-     * {@link CacheInvalidationListener#handleMessage(String)} 处理。</p>
-     *
-     * <p>仅在 {@link CacheInvalidationListener} 存在时注册（即 L1+L2 二级缓存模式）。</p>
-     *
-     * @param connectionFactory Redis 连接工厂
-     * @param properties        缓存配置属性
-     * @param adapter           缓存失效消息监听适配器
-     * @return RedisMessageListenerContainer 实例
-     */
-    @Bean("bingCacheInvalidationListenerContainer")
-    @ConditionalOnBean(CacheInvalidationListener.class)
-    @ConditionalOnMissingBean(name = "bingCacheInvalidationListenerContainer")
-    public RedisMessageListenerContainer bingCacheInvalidationListenerContainer(
-        RedisConnectionFactory connectionFactory,
-        BingCacheProperties properties,
-        @Qualifier("bingCacheInvalidationMessageListenerAdapter") MessageListenerAdapter adapter) {
-      RedisMessageListenerContainer container = new RedisMessageListenerContainer();
-      container.setConnectionFactory(connectionFactory);
-      container.addMessageListener(adapter,
-          new PatternTopic(properties.getRedis().getChannelName()));
-      REDIS_LOG.info("Bing Cache: Redis Pub/Sub listener registered on channel: {}",
-          properties.getRedis().getChannelName());
-      return container;
-    }
-
-    /**
-     * 注册版本对账服务.
-     *
-     * <p>仅在 Redis 可用且对账启用、且 {@link CompositeCacheManager} 存在时注册。
-     * 用户自定义 {@link CacheManager} 时不创建此 bean，避免把用户实现当作 L1 调用。
-     * 服务随 Spring 容器生命周期自动启停。</p>
-     *
-     * @param versionStore  版本号存储（共享 bean）
-     * @param cacheManager  缓存管理器
-     * @param properties    缓存配置属性
-     * @return CacheReconciliationService 实例
-     */
-    @Bean
-    @ConditionalOnBean(CompositeCacheManager.class)
-    @ConditionalOnProperty(prefix = "bing.cache.reconciliation", name = "enabled",
-        havingValue = "true", matchIfMissing = true)
-    @ConditionalOnMissingBean
-    public CacheReconciliationService cacheReconciliationService(
-        CacheVersionStore versionStore,
-        CacheManager cacheManager,
-        BingCacheProperties properties) {
-      CacheManager l1;
-      if (cacheManager instanceof CompositeCacheManager composite) {
-        l1 = composite.getL1CacheManager();
-      } else {
-        // 理论不可达：@ConditionalOnBean(CompositeCacheManager.class) 已保证
-        throw new IllegalStateException(
-            "CacheReconciliationService requires CompositeCacheManager, but got: "
-                + (cacheManager == null ? "null" : cacheManager.getClass().getName()));
-      }
-      CacheReconciliationService service = new CacheReconciliationService(
-          versionStore, l1, properties.getReconciliation().getInterval());
-      REDIS_LOG.info("Bing Cache: Reconciliation service configured, interval={}s",
-          properties.getReconciliation().getInterval());
-      return service;
     }
   }
 }
