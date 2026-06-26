@@ -55,6 +55,13 @@ public class CacheReconciliationService implements SmartLifecycle {
 
   private final Map<String, Long> lastKnownGroupVersions = new ConcurrentHashMap<>();
 
+  /**
+   * 是否已完成一次可信的完整基线对账.
+   *
+   * <p>只有 cacheName 与 group 扫描都完成后才置为 true。若 Redis 抖动导致本轮对账中途失败，
+   * 保持 false 可避免把启动前已存在但尚未建立基线的版本 key 误判为“新增版本 key”并清理 L1。
+   * 代价是失败期间新增的版本 key 会延后到下一次完整基线之后再按新增处理，属于保守降级。</p>
+   */
   private volatile boolean initialized = false;
 
   private ScheduledExecutorService scheduler;
@@ -159,6 +166,7 @@ public class CacheReconciliationService implements SmartLifecycle {
           checkGroupVersion(group);
         }
       }
+      // 只有完整走完 cacheName 与 group 扫描，才认为已建立可信基线。
       initialized = true;
     } catch (Exception e) {
       LOG.error("Bing Cache: Reconciliation failed", e);
