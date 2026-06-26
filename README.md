@@ -350,7 +350,7 @@ public class UserService {
 
 **方式一：使用 `group` 分组（推荐）**
 
-将相关缓存归入同一 group，写操作只需一个 `@BingCacheEvict(group=..., allEntries=true)` 即可清除整个 group，无需逐个声明：
+将相关缓存归入同一 group，写操作用 `@BingCacheEvict(group=..., allEntries=true)` 按命名空间批量清除，无需逐个精确声明 cacheName 与参数：
 
 ```java
 @Service
@@ -371,22 +371,29 @@ public class UserService {
   public UserStatsVO getUserStats() { ... }
   // key: user:stats()
 
-  // 更新用户 — 一个注解清除 user 组下所有缓存
-  @BingCacheEvict(group = "user", allEntries = true)
-  public void updateUser(Long id, UserVO vo) { ... }
-
-  // 新增订单到用户 — 只清 user 组的 orders 缓存
+  // 用户订单 — 缓存到 user 组的 orders
   @BingCache(group = "user", cacheName = "orders", expireTime = 120)
   public List<OrderVO> getUserOrders(Long userId) { ... }
+  // key: user:orders(Sg[N:1])
 
-  @BingCacheEvict(group = "user", cacheName = "orders", argIndexes = {0})
+  // 更新用户 — 一个注解清除 user 组下所有缓存（detail/list/stats/orders 全清）
+  @BingCacheEvict(group = "user", allEntries = true)
+  public void updateUser(Long id, UserVO vo) { ... }
+  // 清除范围：user:* 所有 key
+
+  // 新增订单 — 只清 user 组的 orders 缓存（不影响 detail/list/stats）
+  @BingCacheEvict(group = "user", cacheName = "orders", allEntries = true)
   public void createOrder(Long userId, String orderId) { ... }
+  // 清除范围：user:orders* 所有 key
 
-  // 刷新统计 — 只清 user 组的 stats
+  // 刷新统计 — 只清 user 组的 stats 缓存
   @BingCacheEvict(group = "user", cacheName = "stats", allEntries = true)
   public void refreshUserStats() { ... }
+  // 清除范围：user:stats* 所有 key
 }
 ```
+
+> **要点**：方式一全程用 `group + allEntries` 按"组 / cacheName"批量清除，不依赖 `argIndexes`/`argSpel` 精确匹配参数。这样即使查询方法的参数选取方式（`argIndexes`/`argSpel`）变化，清除注解也无需同步修改。若只需清单个 key（精确到某用户），见下面"方式二"的 `argIndexes` 用法。
 
 **方式二：使用多个 `@BingCacheEvict`（不使用 group）**
 
