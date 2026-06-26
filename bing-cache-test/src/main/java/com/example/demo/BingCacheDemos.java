@@ -4,6 +4,8 @@ import com.bing.cache.annotation.BingCache;
 import com.bing.cache.annotation.BingCacheEvict;
 import org.springframework.stereotype.Component;
 
+import java.util.concurrent.atomic.AtomicLong;
+
 /**
  * BingCache 核心用法演示
  *
@@ -17,6 +19,25 @@ import org.springframework.stereotype.Component;
 @Component
 public class BingCacheDemos {
 
+    /**
+     * 方法调用序号（单调递增）.
+     *
+     * <p>演示方法的返回值携带此序号，用于在测试中判断方法是否被真正执行：
+     * 命中缓存时序号不变（返回值相同），未命中或驱逐后重算时序号递增（返回值不同）。</p>
+     *
+     * <p>不用 {@link System#currentTimeMillis()}：Windows 上其粒度约 15ms，
+     * 在延迟较低的本地 Redis 环境下，连续两次调用可能落入同一毫秒桶，
+     * 导致"驱逐后应重新执行"的断言偶发失败。调用序号无此问题。</p>
+     */
+    private final AtomicLong callSeq = new AtomicLong();
+
+    /**
+     * 返回并递增调用序号，供演示方法在返回值中携带.
+     */
+    private long nextCallSeq() {
+        return callSeq.incrementAndGet();
+    }
+
     // ==================== 场景1: 基础缓存 ====================
 
     /**
@@ -26,7 +47,7 @@ public class BingCacheDemos {
      */
     @BingCache(cacheName = "user", expireTime = 300)
     public String getUserById(Long id) {
-        return "User-" + id + " [time:" + System.currentTimeMillis() + "]";
+        return "User-" + id + " [time:" + nextCallSeq() + "]";
     }
 
     /**
@@ -94,7 +115,7 @@ public class BingCacheDemos {
      */
     @BingCache(keyPrefix = "dict", expireTime = 3600)
     public String getDict(String dictType) {
-        return "Dict[" + dictType + "] [time:" + System.currentTimeMillis() + "]";
+        return "Dict[" + dictType + "] [time:" + nextCallSeq() + "]";
     }
 
     /**
@@ -110,7 +131,7 @@ public class BingCacheDemos {
      */
     @BingCache(cacheName = "userDetail", argSpel = "#query.id", expireTime = 300)
     public String getUserDetail(UserDetailQuery query) {
-        return "UserDetail-" + query.getId() + "(" + query.getSource() + ") [time:" + System.currentTimeMillis() + "]";
+        return "UserDetail-" + query.getId() + "(" + query.getSource() + ") [time:" + nextCallSeq() + "]";
     }
 
     /**
@@ -150,7 +171,7 @@ public class BingCacheDemos {
    */
   @BingCache(expireTime = 120)
   public String findItem(Long id) {
-    return "Item-Long:" + id + " [time:" + System.currentTimeMillis() + "]";
+    return "Item-Long:" + id + " [time:" + nextCallSeq() + "]";
   }
 
   /**
@@ -162,7 +183,7 @@ public class BingCacheDemos {
    */
   @BingCache(expireTime = 120)
   public String findItem(String code) {
-    return "Item-String:" + code + " [time:" + System.currentTimeMillis() + "]";
+    return "Item-String:" + code + " [time:" + nextCallSeq() + "]";
   }
 
   // ==================== 场景7: 多缓存协同失效 ====================
@@ -174,7 +195,7 @@ public class BingCacheDemos {
      */
     @BingCache(cacheName = "userAccount", expireTime = 300)
     public String getUserAccount(Long id) {
-        return "Account-" + id + " [time:" + System.currentTimeMillis() + "]";
+        return "Account-" + id + " [time:" + nextCallSeq() + "]";
     }
 
     /**
@@ -184,7 +205,7 @@ public class BingCacheDemos {
      */
     @BingCache(cacheName = "userOrders", expireTime = 120)
     public String getUserOrders(Long userId) {
-        return "Orders-" + userId + " [time:" + System.currentTimeMillis() + "]";
+        return "Orders-" + userId + " [time:" + nextCallSeq() + "]";
     }
 
     /**
@@ -194,7 +215,7 @@ public class BingCacheDemos {
      */
     @BingCache(cacheName = "userStats", expireTime = 600)
     public String getUserStats() {
-        return "Stats [time:" + System.currentTimeMillis() + "]";
+        return "Stats [time:" + nextCallSeq() + "]";
     }
 
     /**
@@ -246,7 +267,7 @@ public class BingCacheDemos {
      */
     @BingCache(group = "admin", cacheName = "user", expireTime = 300)
     public String getAdminUser(Long id) {
-        return "AdminUser-" + id + " [time:" + System.currentTimeMillis() + "]";
+        return "AdminUser-" + id + " [time:" + nextCallSeq() + "]";
     }
 
     /**
@@ -256,7 +277,7 @@ public class BingCacheDemos {
      */
     @BingCache(group = "admin", cacheName = "dict", expireTime = 3600)
     public String getAdminDict(String dictType) {
-        return "AdminDict[" + dictType + "] [time:" + System.currentTimeMillis() + "]";
+        return "AdminDict[" + dictType + "] [time:" + nextCallSeq() + "]";
     }
 
     /**
