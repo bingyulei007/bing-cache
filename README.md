@@ -265,32 +265,45 @@ public Order getOrder(Long userId, String type) { ... }
 
 #### 使用示例
 
+下面所有清除方法都配对同一个查询方法，其 key 为基准：
+
 ```java
-// 更新后清除指定缓存（cacheName 与 @BingCache 对应）
+// 查询 — 基准 key: userDetail(Sg[N:1])
+@BingCache(cacheName = "userDetail", expireTime = 300)
+public UserVO getUserById(Long id) { ... }
+```
+
+各 `@BingCacheEvict` 用法及生成的 key（注意 key 必须与查询方法匹配，否则清不到）：
+
+```java
+// 单参数：默认用全部参数生成 key → userDetail(Sg[N:1]) ✓ 匹配
 @BingCacheEvict(cacheName = "userDetail")
+public void deleteById(Long id) { ... }
+
+// 多参数：用 argIndexes 只取 id 生成 key → userDetail(Sg[N:1]) ✓ 匹配
+//        （不加 argIndexes 时两参数都会参与，key 变成 [N:1, {...}] 不匹配）
+@BingCacheEvict(cacheName = "userDetail", argIndexes = {0})
 public void updateUser(Long id, UserVO vo) { ... }
 
-// 删除后清除指定缓存（只取 id 生成 key，与查询方法的 key 匹配）
-@BingCacheEvict(cacheName = "userDetail", argIndexes = {0})
-public void deleteUser(Long id) { ... }
+// 使用 argSpel 取 id 生成 key → userDetail(Sg[N:1]) ✓ 匹配
+// （表达式需与 @BingCache 的 argSpel 完全一致）
+@BingCacheEvict(cacheName = "userDetail", argSpel = "#vo.id")
+public void deleteUser(UserVO vo) { ... }
 
 // 方法执行前清除缓存（即使方法抛异常，缓存也会被清除）
-@BingCacheEvict(cacheName = "userDetail", beforeInvocation = true)
+@BingCacheEvict(cacheName = "userDetail", argIndexes = {0}, beforeInvocation = true)
 public void forceUpdateUser(Long id, UserVO vo) { ... }
 
-// 清空指定 cacheName 下的所有缓存
+// 清空指定 cacheName 下的所有缓存（忽略参数，清整个 userDetail 前缀）
 @BingCacheEvict(cacheName = "userDetail", allEntries = true)
 public void refreshAllUsers() { ... }
 
 // 清空全部缓存（不指定 cacheName/keyPrefix）
 @BingCacheEvict(allEntries = true)
 public void clearAllCache() { ... }
-
-// 使用 argSpel 与 @BingCache 配对（表达式需一致）
-@BingCacheEvict(cacheName = "user", argSpel = "#user.id")
-public void deleteUser(UserVO user) { ... }
-// evict key: user(Sg[N:1]) ✓ 匹配
 ```
+
+> **关键**：`argIndexes` / `argSpel` 决定 evict 的 key 是否与查询 key 匹配，与 `@BingCache` 必须对应。`allEntries=true` 时不按参数清，而是清整个前缀，参数配置被忽略。
 
 ### 配对使用
 
