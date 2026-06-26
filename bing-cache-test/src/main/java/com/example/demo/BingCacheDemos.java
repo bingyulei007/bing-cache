@@ -32,6 +32,15 @@ public class BingCacheDemos {
     private final AtomicLong callSeq = new AtomicLong();
 
     /**
+     * getConfig 方法体执行计数，用于测试验证 cacheNullValue 与 beforeInvocation 行为.
+     */
+    private final AtomicLong getConfigCallCount = new AtomicLong();
+
+    public long getGetConfigCallCount() {
+        return getConfigCallCount.get();
+    }
+
+    /**
      * 返回并递增调用序号，供演示方法在返回值中携带.
      */
     private long nextCallSeq() {
@@ -99,6 +108,7 @@ public class BingCacheDemos {
      */
     @BingCache(cacheName = "config", expireTime = 600, cacheNullValue = true)
     public String getConfig(String configKey) {
+        getConfigCallCount.incrementAndGet();
         if ("not-exist".equals(configKey)) {
             return null; // 不存在的配置
         }

@@ -3,12 +3,34 @@ package com.example.demo;
 import com.bing.cache.annotation.BingCache;
 import org.springframework.stereotype.Component;
 
+import java.util.concurrent.atomic.AtomicLong;
+
 /**
  * BingCache 注解用法演示
  * 展示各种缓存配置组合
  */
 @Component
 public class CacheDemoExamples {
+
+    /**
+     * 方法体执行计数，用于测试区分"命中缓存"与"重新执行方法"。
+     * 命中缓存不会进入方法体，计数不增长；未命中或驱逐后重算时计数递增。
+     */
+    private final AtomicLong cacheNullValueCallCount = new AtomicLong();
+    private final AtomicLong noCacheNullValueCallCount = new AtomicLong();
+    private final AtomicLong listDataCallCount = new AtomicLong();
+
+    public long getCacheNullValueCallCount() {
+        return cacheNullValueCallCount.get();
+    }
+
+    public long getNoCacheNullValueCallCount() {
+        return noCacheNullValueCallCount.get();
+    }
+
+    public long getListDataCallCount() {
+        return listDataCallCount.get();
+    }
 
     // ========== 基础缓存用法 ==========
 
@@ -41,6 +63,7 @@ public class CacheDemoExamples {
      */
     @BingCache(cacheName = "nullable", expireTime = 60, cacheNullValue = true)
     public String cacheNullValue(Long id) {
+        cacheNullValueCallCount.incrementAndGet();
         if (id < 0) return null; // id为负时返回null，但仍会缓存
         return "Value: " + id;
     }
@@ -51,6 +74,7 @@ public class CacheDemoExamples {
      */
     @BingCache(cacheName = "non-nullable", expireTime = 60, cacheNullValue = false)
     public String noCacheNullValue(Long id) {
+        noCacheNullValueCallCount.incrementAndGet();
         return id > 0 ? "Value: " + id : null;
     }
 
@@ -104,6 +128,15 @@ public class CacheDemoExamples {
         return "UserQuery SpEL result: " + query + " [time:" + System.currentTimeMillis() + "]";
     }
 
+    /**
+     * 8.2 多值 SpEL key：{#category, #page} 选取两个字段组合成多值 key.
+     * keyword 不参与 key，相同 category+page、不同 keyword 应命中同一缓存。
+     */
+    @BingCache(cacheName = "multi-spel", argSpel = "{#category, #page}", expireTime = 60)
+    public String multiValueSpelKey(String category, String keyword, Integer page) {
+        return "MultiSpel[" + category + "," + keyword + ",page=" + page + "]: " + System.nanoTime();
+    }
+
     // ========== 集合返回值 ==========
 
     /**
@@ -111,6 +144,7 @@ public class CacheDemoExamples {
      */
     @BingCache(cacheName = "list-data", expireTime = 180)
     public java.util.List<String> listData(String category) {
+        listDataCallCount.incrementAndGet();
         java.util.List<String> list = new java.util.ArrayList<>();
         list.add(category + "-item1");
         list.add(category + "-item2");

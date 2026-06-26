@@ -7,6 +7,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.Random;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 演示 BingCache 用法的服务类
@@ -16,6 +17,16 @@ public class DemoService {
 
     private static final Logger LOG = LoggerFactory.getLogger(DemoService.class);
     private final Random random = new Random();
+
+    /**
+     * 各缓存方法的方法体执行计数，用于测试区分"命中缓存"与"重新执行方法"。
+     * 命中缓存不会进入方法体，计数不增长；缓存未命中或被驱逐后重算时计数递增。
+     */
+    private final AtomicLong getOrderByIdCallCount = new AtomicLong();
+
+    public long getGetOrderByIdCallCount() {
+        return getOrderByIdCallCount.get();
+    }
 
     /**
      * 带缓存的方法 - 缓存 60 秒
@@ -35,7 +46,7 @@ public class DemoService {
     /**
      * 带缓存的方法 - 使用 keyPrefix
      */
-    @BingCache(cacheName = "product", keyPrefix = "product", expireTime = 120)
+    @BingCache( keyPrefix = "product", expireTime = 120)
     public String getProductByCode(String code) {
         LOG.info("[BingCache] 执行 getProductByCode({})，模拟数据库查询...", code);
         try {
@@ -51,9 +62,11 @@ public class DemoService {
      */
     @BingCache(cacheName = "order", expireTime = 60, cacheNullValue = true)
     public String getOrderById(Long orderId) {
+        getOrderByIdCallCount.incrementAndGet();
         LOG.info("[BingCache] 执行 getOrderById({})...", orderId);
         // 模拟返回 null
         if (orderId > 1000) {
+            System.out.println("##进入数据库查询");
             return null;
         }
         return "Order-" + orderId + " [" + LocalDateTime.now() + "]";

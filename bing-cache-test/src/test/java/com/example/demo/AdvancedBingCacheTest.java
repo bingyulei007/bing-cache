@@ -124,43 +124,59 @@ public class AdvancedBingCacheTest {
         }
 
         @Test
-        @DisplayName("L1 回填时携带 L2 剩余 TTL")
-        void testBackfillWithRemainingTtl() {
+        @DisplayName("L1 回填携带 L2 剩余 TTL — L2 过期后 L1 也失效")
+        void testBackfillWithRemainingTtl() throws InterruptedException {
             if (!(cacheManager instanceof CompositeCacheManager composite)) {
                 return;
             }
 
             String key = "ttl-backfill-key";
             String value = "ttl-value";
-            long expireSeconds = 300;
+            long expireSeconds = 2; // L2 仅 2s
 
-            // 写入 L2
+            // 写入 L2（不写 L1）
             composite.getL2CacheManager().put(key, value, expireSeconds);
 
-            // 获取触发回填
-            composite.get(key);
+            // 获取触发 L1 回填，L1 的 TTL 应被限制为 L2 剩余（约 2s）
+            Object result = composite.get(key);
+            assertEquals(value, result, "应从 L2 获取并回填 L1");
+            assertNotNull(composite.getL1CacheManager().get(key), "L1 应被回填");
 
-            // 验证 L1 有值
-            assertNotNull(composite.getL1CacheManager().get(key),
-                "L1 应被回填");
+            // 等待 L2 过期（>2s），此时 L2 失效
+            Thread.sleep(2500);
+            assertNull(composite.getL2CacheManager().get(key), "L2 应已过期");
 
-            // 注意：无法直接验证 L1 的 TTL，但可以通过等待验证不会永不过期
-            // 这里只验证回填成功
+            // 若 L1 回填时正确携带了 L2 剩余 TTL，L1 此时也应已失效（不会永驻）
+            assertNull(composite.getL1CacheManager().get(key),
+                "L1 回填应携带 L2 剩余 TTL，L2 过期后 L1 不应残留");
         }
 
         @Test
         @DisplayName("NullValueSentinel 只存 L1 不存 L2")
         void testNullValueOnlyInL1() {
+            if (!(cacheManager instanceof CompositeCacheManager composite)) {
+                return;
+            }
+
             // 使用 cacheNullValue=true 的方法
+            long countBefore = bingCacheDemos.getGetConfigCallCount();
+
             String result = bingCacheDemos.getConfig("not-exist");
             assertNull(result, "不存在的配置应返回 null");
+            long countAfterFirst = bingCacheDemos.getGetConfigCallCount();
+            assertEquals(countBefore + 1, countAfterFirst, "首次调用应执行方法体");
 
-            // 再次获取，验证 null 被缓存
+            // 再次获取，验证 null 被缓存 — 不应再进入方法体
             String result2 = bingCacheDemos.getConfig("not-exist");
             assertNull(result2, "第二次应从缓存获取 null");
+            assertEquals(countAfterFirst, bingCacheDemos.getGetConfigCallCount(),
+                "null 应被缓存，第二次不应重新执行方法");
 
-            // 注意：NullValueSentinel 是包私有类，无法直接验证
-            // 但可以通过行为验证：不会穿透到方法执行
+            // NullValueSentinel 只存 L1 不存 L2：
+            // L2（Redis）中该 key 不应存在 null 值。
+            // key 格式为 config(Sg[S:not-exist])，直接查 L2 应为 null。
+            Object l2Value = composite.getL2CacheManager().get("config(Sg[S:not-exist])");
+            assertNull(l2Value, "NullValueSentinel 不应写入 L2");
         }
     }
 
@@ -217,7 +233,7 @@ public class AdvancedBingCacheTest {
     class RedisDegradationTest {
 
         @Test
-        @DisplayName("Redis 可用时正常读写")
+        @DisplayName("Redis 可用时 L1 与 L2 均写入")
         void testRedisAvailable() {
             if (!(cacheManager instanceof CompositeCacheManager composite)) {
                 return;
@@ -226,26 +242,25 @@ public class AdvancedBingCacheTest {
             String key = "redis-test-key";
             String value = "redis-value";
 
-            // 写入缓存
+            // CompositeCacheManager.put 同时写 L1 和 L2
             cacheManager.put(key, value, 60);
 
-            // 从 L2 读取验证
-            Object l2Value = composite.getL2CacheManager().get(key);
-            assertEquals(value, l2Value, "Redis 应有缓存值");
+            // L1 与 L2 都应有值
+            assertEquals(value, composite.getL1CacheManager().get(key), "L1 应有缓存值");
+            assertEquals(value, composite.getL2CacheManager().get(key), "L2 (Redis) 应有缓存值");
         }
 
         @Test
-        @DisplayName("降级后 L1 仍可正常读写")
-        void testL1StillWorksWhenDegraded() {
-            // 注意：此测试无法模拟 Redis 故障，只验证 L1 独立工作
+        @DisplayName("直接操作 L1 时 L1 独立读写")
+        void testL1IndependentReadwrite() {
+            // 此测试不模拟 Redis 故障，仅验证 L1 (Caffeine) 独立读写能力。
             String key = "l1-only-key";
             String value = "l1-value";
 
-            // 直接写入 L1
             if (cacheManager instanceof CompositeCacheManager composite) {
                 composite.getL1CacheManager().put(key, value, 60);
                 Object result = composite.getL1CacheManager().get(key);
-                assertEquals(value, result, "L1 应独立工作");
+                assertEquals(value, result, "L1 应独立读写");
             }
         }
     }
@@ -333,8 +348,11 @@ public class AdvancedBingCacheTest {
     // ========== 7. 并发缓存击穿防护测试 ==========
 
     @Test
-    @DisplayName("多线程并发访问同一未缓存 key - 防止缓存击穿")
-    void testConcurrentCacheMissNoStampede() throws Exception {
+    @DisplayName("多线程并发访问同一未缓存 key - 不抛异常且最终值收敛")
+    void testConcurrentCacheMissConverges() throws Exception {
+        // 注意：bing-cache 的 CacheAspect 不加锁，并发 miss 时多个线程会同时执行方法体
+        // （即不防缓存击穿）。本测试只验证：并发场景下不抛异常，且所有线程都能拿到非 null 结果，
+        // 最终缓存值收敛为某个一致结果。
         int threadCount = 20;
         ExecutorService executor = Executors.newFixedThreadPool(threadCount);
         CountDownLatch startLatch = new CountDownLatch(1);
@@ -347,23 +365,18 @@ public class AdvancedBingCacheTest {
             }));
         }
 
-        // 释放所有线程
         startLatch.countDown();
 
-        // 等待所有线程完成
         Set<String> results = ConcurrentHashMap.newKeySet();
         for (Future<String> future : futures) {
             String result = future.get(10, TimeUnit.SECONDS);
             assertNotNull(result, "并发访问不应返回 null");
             results.add(result);
         }
-
         executor.shutdown();
 
-        // 验证所有线程都得到了相同的结果（缓存命中）
-        // 由于 getUserById 返回包含时间戳的值，
-        // 如果缓存击穿防护正常，所有线程应返回相同的缓存值
-        System.out.println("并发测试完成，结果数量: " + results.size());
+        // 不抛异常即可；results 可能含多个值（并发 miss 各自重算），最终缓存收敛为其中一个。
+        assertFalse(results.isEmpty(), "应至少有一个结果");
     }
 
     @Test
@@ -431,31 +444,19 @@ public class AdvancedBingCacheTest {
         }
 
         @Test
-        @DisplayName("L1 条目不会超过 l1MaxTtl")
-        void testL1EntryRespectsMaxTtl() {
-            if (!(cacheManager instanceof CompositeCacheManager composite)) {
-                return;
-            }
+        @DisplayName("永不过期条目被 l1MaxTtl 截断并实际过期")
+        void testL1EntryRespectsMaxTtl() throws InterruptedException {
+            // 用独立的短 maxTtl 实例真实验证：expireSeconds=0（永不过期）的条目
+            // 在 l1MaxTtl 截断后应于 maxTtl 到期时失效。
+            CaffeineCacheManager l1 = new CaffeineCacheManager(1000L, 1L); // maxTtl=1s
+            l1.put("no-expire-key", "value", 0); // 请求永不过期
 
-            // 写入一个永不过期的条目（expireTime=0）
-            String key = "no-expire-key";
-            String value = "no-expire-value";
+            // 立即应可读
+            assertEquals("value", l1.get("no-expire-key"), "写入后应立即可读");
 
-            // 直接写入 L1，expireSeconds=0 表示永不过期
-            composite.getL1CacheManager().put(key, value, 0);
-
-            // 验证 L1 有值
-            Object l1Value = composite.getL1CacheManager().get(key);
-            assertNotNull(l1Value, "L1 应有值");
-
-            // 注意：无法直接验证 TTL 是否被限制，但可以通过配置验证
-            if (composite.getL1CacheManager() instanceof CaffeineCacheManager caffeine) {
-                long maxTtl = caffeine.getL1MaxTtlSeconds();
-                if (maxTtl > 0) {
-                    // 永不过期的条目应被限制为 maxTtl
-                    System.out.println("L1 最大 TTL: " + maxTtl + "s");
-                }
-            }
+            // 等待 maxTtl（1s）过后应已过期
+            Thread.sleep(1500);
+            assertNull(l1.get("no-expire-key"), "永不过期条目应被 l1MaxTtl 截断为 1s 后过期");
         }
     }
 

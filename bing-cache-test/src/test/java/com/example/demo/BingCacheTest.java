@@ -78,13 +78,20 @@ public class BingCacheTest {
     void testCacheNullValue() {
         Long orderId = 2000L; // id > 1000 会返回null
 
-        // 第一次调用返回null
+        long countBefore = demoService.getGetOrderByIdCallCount();
+
+        // 第一次调用返回null（cacheNullValue=true，null 也会被缓存）
         String result1 = demoService.getOrderById(orderId);
         assertNull(result1);
+        long countAfterFirst = demoService.getGetOrderByIdCallCount();
+        assertEquals(countBefore + 1, countAfterFirst, "首次调用应执行方法体");
 
-        // 第二次调用应该从缓存返回null (因为cacheNullValue=true)
+        // 第二次调用应命中缓存（返回缓存的 null），不应再进入方法体
         String result2 = demoService.getOrderById(orderId);
         assertNull(result2);
+        long countAfterSecond = demoService.getGetOrderByIdCallCount();
+        assertEquals(countAfterFirst, countAfterSecond,
+            "cacheNullValue=true 时 null 应被缓存，第二次调用不应重新执行方法");
 
         System.out.println("Null值缓存测试通过");
     }
@@ -102,6 +109,21 @@ public class BingCacheTest {
         // 无效id返回null
         String nullResult = cacheDemoExamples.noCacheNullValue(invalidId);
         assertNull(nullResult);
+
+        // cacheNullValue=false 时 null 不应被缓存：相同无效 id 再次调用应重新执行方法
+        long countAfterFirstNull = cacheDemoExamples.getNoCacheNullValueCallCount();
+        String nullResult2 = cacheDemoExamples.noCacheNullValue(invalidId);
+        assertNull(nullResult2);
+        long countAfterSecondNull = cacheDemoExamples.getNoCacheNullValueCallCount();
+        assertEquals(countAfterFirstNull + 1, countAfterSecondNull,
+            "cacheNullValue=false 时 null 不应被缓存，重复调用应重新执行方法");
+
+        // 对照：有效 id 的非 null 结果应被缓存，重复调用计数不增长
+        long countAfterValidFirst = cacheDemoExamples.getNoCacheNullValueCallCount();
+        cacheDemoExamples.noCacheNullValue(validId);
+        long countAfterValidSecond = cacheDemoExamples.getNoCacheNullValueCallCount();
+        assertEquals(countAfterValidFirst, countAfterValidSecond,
+            "cacheNullValue=false 时非 null 结果仍应被缓存");
 
         System.out.println("不缓存null值测试通过");
     }
@@ -152,13 +174,19 @@ public class BingCacheTest {
     void testListReturn() {
         String category = "electronics";
 
+        long countBefore = cacheDemoExamples.getListDataCallCount();
+
         List<String> list1 = cacheDemoExamples.listData(category);
         assertNotNull(list1);
         assertEquals(3, list1.size());
+        long countAfterFirst = cacheDemoExamples.getListDataCallCount();
+        assertEquals(countBefore + 1, countAfterFirst, "首次调用应执行方法体");
 
-        // 第二次应该从缓存获取
+        // 第二次应该从缓存获取 — 不应再进入方法体
         List<String> list2 = cacheDemoExamples.listData(category);
         assertEquals(list1, list2);
+        assertEquals(countAfterFirst, cacheDemoExamples.getListDataCallCount(),
+            "List 返回值应被缓存，第二次不应重新执行方法");
 
         System.out.println("列表数据: " + list1);
     }
@@ -170,13 +198,20 @@ public class BingCacheTest {
         // cacheNullValue(Long) 在 id<0 时返回 null，cacheNullValue=true 时 null 也会被缓存
         Long nonExistId = -9999L;
 
-        // 第一次 - 命中"数据库"，返回 null
+        long countBefore = cacheDemoExamples.getCacheNullValueCallCount();
+
+        // 第一次 - 执行方法体，返回 null（同时缓存 null）
         String result1 = cacheDemoExamples.cacheNullValue(nonExistId);
         assertNull(result1);
+        long countAfterFirst = cacheDemoExamples.getCacheNullValueCallCount();
+        assertEquals(countBefore + 1, countAfterFirst, "首次调用应执行方法体");
 
-        // 第二次 - 应该从缓存获取 null（防穿透）
+        // 第二次 - 应命中缓存的 null（防穿透），不再进入方法体
         String result2 = cacheDemoExamples.cacheNullValue(nonExistId);
         assertNull(result2);
+        long countAfterSecond = cacheDemoExamples.getCacheNullValueCallCount();
+        assertEquals(countAfterFirst, countAfterSecond,
+            "cacheNullValue=true 时 null 应被缓存，第二次调用不应重新执行方法（防穿透）");
 
         System.out.println("缓存穿透防护测试通过 - null值被正确缓存");
     }
@@ -194,6 +229,30 @@ public class BingCacheTest {
         assertTrue(result2.contains("key2"));
 
         System.out.println("不同参数缓存测试: " + result1 + " | " + result2);
+    }
+
+    // ========== 多值 SpEL key 测试 ==========
+
+    /**
+     * argSpel={#category, #page} 生成多值 key，keyword 不参与.
+     * 相同 category+page、不同 keyword 应命中同一缓存（返回值相同）。
+     */
+    @Test
+    void testMultiValueSpelKeyIgnoresUnselectedParam() {
+        // 首次写入缓存（keyword=手机）
+        String r1 = cacheDemoExamples.multiValueSpelKey("electronics", "手机", 1);
+
+        // 相同 category+page、不同 keyword 应命中同一缓存
+        String r2 = cacheDemoExamples.multiValueSpelKey("electronics", "电脑", 1);
+        assertEquals(r1, r2, "多值 SpEL key 不含 keyword，应命中同一缓存");
+
+        // 不同 page 应生成不同 key → 重新执行（返回值不同）
+        String r3 = cacheDemoExamples.multiValueSpelKey("electronics", "电脑", 2);
+        assertNotEquals(r1, r3, "不同 page 应生成不同 key");
+
+        // 不同 category 应生成不同 key → 重新执行
+        String r4 = cacheDemoExamples.multiValueSpelKey("books", "书", 1);
+        assertNotEquals(r1, r4, "不同 category 应生成不同 key");
     }
 
     // ========== 对象参数测试 ==========
@@ -447,21 +506,27 @@ public class BingCacheTest {
      */
     @Test
     void testEvict_beforeInvocation_evenOnException() {
-        // 先准备一条 config 缓存
-        String before = bingCacheDemos.getConfig("any-key");
-        // not-exist 会返回 null，cacheNullValue=true 也会缓存 null；这里用正常 key
+        String key = "any-key";
+
+        // 先准备一条 config 缓存（cacheName="config"）
+        String before = bingCacheDemos.getConfig(key);
         assertNotNull(before);
+        long countAfterPrepare = bingCacheDemos.getGetConfigCallCount();
 
-        // 触发会抛异常的失效方法
+        // 命中缓存，再次查询不应进入方法体
+        bingCacheDemos.getConfig(key);
+        assertEquals(countAfterPrepare, bingCacheDemos.getGetConfigCallCount(),
+            "已缓存时再次查询不应重新执行方法");
+
+        // 触发会抛异常的失效方法（beforeInvocation=true：方法执行前就清缓存）
         assertThrows(RuntimeException.class,
-                () -> bingCacheDemos.forceRefreshConfig("any-key"));
+                () -> bingCacheDemos.forceRefreshConfig(key));
 
-        // 缓存已被清除（方法体未执行成功），再次查询应重算
-        String after = bingCacheDemos.getConfig("any-key");
-        // 两次都是"ConfigValue:any-key"（方法体是确定的），无法用值差异证明；
-        // 用 cacheManager 直接验证 key 已不在缓存中
-        // 这里通过"未抛异常 + 不为 null"做软验证；严谨验证见下方
-        assertNotNull(after);
+        // 缓存已被清除（即使方法体抛异常），再次查询应重新执行方法 → 计数增长
+        String after = bingCacheDemos.getConfig(key);
+        assertEquals(before, after, "getConfig 返回值确定，两次相同");
+        assertEquals(countAfterPrepare + 1, bingCacheDemos.getGetConfigCallCount(),
+            "beforeInvocation 在异常前已清缓存，再次查询应重新执行方法");
     }
 
     // ========== 多缓存协同失效测试 ==========
