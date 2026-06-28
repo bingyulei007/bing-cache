@@ -518,7 +518,7 @@ public class UserService {
 | 业务方法返回 null 且 `cacheNullValue = false` | 不写缓存，后续调用仍会执行原方法 |
 | 业务方法返回 null 且 `cacheNullValue = true` | 写入 L1 null 占位符，后续本实例命中后还原为 null 返回；NullValue 不写入 L2 Redis |
 | L2 命中但 TTL 查询返回 `-2` 或 `0` | 跳过 L1 回填，避免创建已经过期或即将过期的本地脏数据 |
-| 单 key `evict()` / `@BingCacheEvict(allEntries = false)` | 清除当前实例 L1 和 Redis L2，并通过 Redis Pub/Sub 通知其他实例；不递增版本号，Pub/Sub 丢失时只能依赖 `l1-max-ttl` 兜底 |
+| 单 key `evict()` / `@BingCacheEvict(allEntries = false)` 或 `@BingCacheEvict(cacheName = "user", allEntries = false)` | 仅清除当前实例 L1 和 Redis L2 中的这个完整 key，并通过 Redis Pub/Sub 通知其他实例清除同一个 key；**即使配置了 `cacheName`，也不递增 cacheName/group/全局版本号，因此不会触发版本对账去清空同 cacheName 下的所有缓存**。若 Pub/Sub 丢失，只能依赖 `l1-max-ttl` 等待其他实例 L1 中该 key 过期 |
 | `clear()` / `@BingCacheEvict(allEntries = true)` | 清除当前实例缓存并发布 Pub/Sub；在二级缓存模式下递增版本号，可由版本对账补偿 Pub/Sub 丢失 |
 
 ## 缓存架构
