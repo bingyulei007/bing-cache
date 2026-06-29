@@ -51,11 +51,39 @@ echo "Project: $PROJECT_DIR"
 echo "Instances: $COUNT (ports $START_PORT-$((START_PORT + COUNT - 1)))"
 echo ""
 
-# Build the project first
-echo -e "${YELLOW}=== Building project...${NC}"
-cd "$PROJECT_DIR"
-mvn -q package -DskipTests
-echo -e "${GREEN}Build completed.${NC}"
+# Validate that a jar is an executable Spring Boot fat jar (has Start-Class in manifest)
+is_executable_jar() {
+    local jar="$1"
+    [ -n "$jar" ] && [ -f "$jar" ] && \
+        unzip -p "$jar" META-INF/MANIFEST.MF 2>/dev/null | grep -q "Start-Class"
+}
+
+# Find an existing fat jar first (skip build if already available)
+JAR_FILE=$(ls -t "$PROJECT_DIR/target/bing-cache-test-"*.jar 2>/dev/null | head -1)
+if ! is_executable_jar "$JAR_FILE"; then
+    # Build the project
+    echo -e "${YELLOW}=== Building project...${NC}"
+    cd "$PROJECT_DIR"
+    mvn -q package -DskipTests || {
+        echo -e "${RED}ERROR: Build failed${NC}"
+        exit 1
+    }
+    JAR_FILE=$(ls -t "$PROJECT_DIR/target/bing-cache-test-"*.jar 2>/dev/null | head -1)
+    if ! is_executable_jar "$JAR_FILE"; then
+        echo -e "${RED}ERROR: Build did not produce an executable fat jar${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}Build completed.${NC}"
+fi
+
+# Convert to Windows path for java.exe compatibility (Git Bash /c/... -> C:\...)
+if command -v cygpath >/dev/null 2>&1; then
+    JAR_WIN=$(cygpath -w "$JAR_FILE")
+else
+    JAR_WIN=$(echo "$JAR_FILE" | sed 's|^/\([a-zA-Z]\)/|\1:/|; s|/|\\|g')
+fi
+
+echo -e "${GREEN}Using jar: $(basename "$JAR_FILE")${NC}"
 echo ""
 
 # === Start instances ===
@@ -70,8 +98,7 @@ for i in $(seq 0 $((COUNT - 1))); do
 
     # Run in background, redirect output to log file
     log_file="$PROJECT_DIR/target/instance-$profile.log"
-    mvn spring-boot:run \
-        -Dspring-boot.run.profiles="$profile" \
+    java -jar "$JAR_WIN" --spring.profiles.active="$profile" \
         > "$log_file" 2>&1 &
 
     pid=$!

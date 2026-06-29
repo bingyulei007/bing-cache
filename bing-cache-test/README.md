@@ -36,6 +36,11 @@ mvn -pl bing-cache-test -am -Dtest=BingCacheTest#testBasicCache test
 ### 启动 Demo 应用（HTTP 手动验证）
 
 ```bash
+# 构建并启动（推荐：java -jar 更快更稳定）
+mvn -pl bing-cache-test -am package -DskipTests
+java -jar bing-cache-test/target/bing-cache-test-*.jar
+
+# 或直接通过 Maven 启动（较慢，Windows Git Bash 下可能遇到 mvn wrapper 问题）
 mvn -pl bing-cache-test -am spring-boot:run
 ```
 
