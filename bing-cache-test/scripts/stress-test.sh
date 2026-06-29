@@ -77,6 +77,63 @@ FAIL_COUNT=0
 declare -a FAILURE_DETAILS
 
 # ====================================================================
+# Portable wait: poll PIDs until all exit
+#
+# Why not bash `wait`? On Windows + Git Bash, `wait` cannot reliably
+# reap `.exe` child processes (podman.exe, java.exe) — the bash PID
+# differs from the Windows PID, and SIGCHLD never arrives, so `wait`
+# blocks forever. Polling `kill -0` detects actual termination.
+#
+# Args: space-separated list of PIDs (or empty to read from
+#       $PROJECT_DIR/.stress-hey-pids.txt)
+# ====================================================================
+wait_pids() {
+    local pids="$*"
+    if [ -z "$pids" ] && [ -f "$PROJECT_DIR/.stress-hey-pids.txt" ]; then
+        pids=$(tr '\n' ' ' < "$PROJECT_DIR/.stress-hey-pids.txt")
+    fi
+    if [ -z "$pids" ]; then
+        return 0
+    fi
+
+    local deadline=$((SECONDS + 600))   # 10 min hard cap
+    while [ $SECONDS -lt $deadline ]; do
+        local any_alive=false
+        for pid in $pids; do
+            if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+                any_alive=true
+                break
+            fi
+        done
+        if [ "$any_alive" = false ]; then
+            return 0
+        fi
+        sleep 0.5
+    done
+    echo -e "${RED}WARN: wait_pids timed out after 600s; force-killing${NC}" >&2
+    for pid in $pids; do
+        kill -9 "$pid" 2>/dev/null || true
+    done
+    return 1
+}
+
+# ====================================================================
+# Portable kill: try POSIX kill first, fall back to Windows taskkill
+#
+# Same root cause as wait_pids: bash `kill` can't reach .exe children
+# on Git Bash for Windows. taskkill //F //PID terminates the Windows
+# process directly.
+# ====================================================================
+kill_pid() {
+    local pid="$1"
+    [ -z "$pid" ] && return 0
+    kill "$pid" 2>/dev/null || true
+    if command -v taskkill >/dev/null 2>&1; then
+        taskkill //F //PID "$pid" >/dev/null 2>&1 || true
+    fi
+}
+
+# ====================================================================
 # Cleanup
 # ====================================================================
 cleanup() {
@@ -87,7 +144,7 @@ cleanup() {
     if [ -f "$PROJECT_DIR/.stress-hey-pids.txt" ]; then
         while read -r pid; do
             if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-                kill "$pid" 2>/dev/null || true
+                kill_pid "$pid"
             fi
         done < "$PROJECT_DIR/.stress-hey-pids.txt"
         rm -f "$PROJECT_DIR/.stress-hey-pids.txt"
@@ -97,7 +154,7 @@ cleanup() {
     if [ "$AUTO_INSTANCES" = true ] && [ -f "$PID_FILE" ]; then
         while IFS='=' read -r profile pid; do
             if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-                kill "$pid" 2>/dev/null || true
+                kill_pid "$pid"
                 echo -e "  Stopped instance ${CYAN}$profile${NC} (PID: $pid)"
             fi
         done < "$PID_FILE"
@@ -588,10 +645,10 @@ scenario_multi_instance_reads() {
     done
 
     # Wait for all background jobs
+    # Note: cannot use bash `wait` on Git Bash for Windows — podman.exe
+    # PIDs aren't reaped correctly. Poll instead.
     echo "  Waiting for all instances to complete..."
-    set +e
-    wait
-    set -e
+    wait_pids
 
     # Parse results
     for i in $(seq 0 $((INSTANCE_COUNT - 1))); do
@@ -700,8 +757,8 @@ scenario_eviction_under_load() {
         sleep 1
     done
 
-    # Wait for hey to finish
-    wait "$hey_pid" 2>/dev/null || true
+    # Wait for hey to finish (poll, not `wait`, for Git Bash compatibility)
+    wait_pids "$hey_pid"
 
     # Parse hey results using shared parser
     local hey_output="$PROJECT_DIR/.stress-hey-output-s3-reads.txt"

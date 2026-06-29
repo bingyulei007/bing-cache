@@ -28,6 +28,16 @@ RED='\033[0;31m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
+# Portable kill: try POSIX kill, fall back to Windows taskkill for .exe children
+kill_pid() {
+    local pid="$1"
+    [ -z "$pid" ] && return 0
+    kill "$pid" 2>/dev/null || true
+    if command -v taskkill >/dev/null 2>&1; then
+        taskkill //F //PID "$pid" >/dev/null 2>&1 || true
+    fi
+}
+
 # Cleanup on exit
 cleanup() {
     echo ""
@@ -35,7 +45,7 @@ cleanup() {
     if [ -f "$PID_FILE" ]; then
         while IFS='=' read -r profile pid; do
             if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-                kill "$pid" 2>/dev/null || true
+                kill_pid "$pid"
                 echo -e "  Stopped instance ${CYAN}$profile${NC} (PID: $pid)"
             fi
         done < "$PID_FILE"
@@ -43,7 +53,9 @@ cleanup() {
     fi
     echo -e "${GREEN}All instances stopped.${NC}"
 }
-trap cleanup EXIT INT TERM
+# EXIT trap alone is sufficient: SIGINT/SIGTERM cause bash to exit,
+# firing EXIT once. Adding INT/TERM traps would double-trigger cleanup.
+trap cleanup EXIT
 
 # === Check prerequisites ===
 echo -e "${CYAN}=== bing-cache Multi-Instance Launcher ===${NC}"
