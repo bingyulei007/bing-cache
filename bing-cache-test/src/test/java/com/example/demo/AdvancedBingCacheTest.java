@@ -2,6 +2,7 @@ package com.example.demo;
 
 import com.bing.cache.cache.CaffeineCacheManager;
 import com.bing.cache.cache.CacheManager;
+import com.bing.cache.cache.CacheVersionStore;
 import com.bing.cache.cache.CompositeCacheManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -43,9 +44,22 @@ public class AdvancedBingCacheTest {
     @Autowired
     private CacheDemoExamples cacheDemoExamples;
 
+    @Autowired(required = false)
+    private CacheVersionStore cacheVersionStore;
+
     @BeforeEach
     void clearCache() {
         cacheManager.clear();
+    }
+
+    private void assertPresentInL1AndL2(CompositeCacheManager composite, String key, String message) {
+        assertNotNull(composite.getL1CacheManager().get(key), message + " - L1");
+        assertNotNull(composite.getL2CacheManager().get(key), message + " - L2");
+    }
+
+    private void assertAbsentFromL1AndL2(CompositeCacheManager composite, String key, String message) {
+        assertNull(composite.getL1CacheManager().get(key), message + " - L1");
+        assertNull(composite.getL2CacheManager().get(key), message + " - L2");
     }
 
     // ========== 1. 重载方法默认前缀 key 碰撞保护 ==========
@@ -189,40 +203,55 @@ public class AdvancedBingCacheTest {
         @Test
         @DisplayName("clear() 触发全局版本号递增")
         void testClearIncrementsGlobalVersion() {
-            if (!(cacheManager instanceof CompositeCacheManager composite)) {
+            if (!(cacheManager instanceof CompositeCacheManager composite) || cacheVersionStore == null) {
                 return;
             }
+
+            String userKey = "user(Sg[N:1])";
+            String dictKey = "dict(Sg[S:test])";
 
             // 准备缓存数据
             bingCacheDemos.getUserById(1L);
             bingCacheDemos.getDict("test");
+            assertPresentInL1AndL2(composite, userKey, "clear 前 user 缓存应存在");
+            assertPresentInL1AndL2(composite, dictKey, "clear 前 dict 缓存应存在");
+
+            long versionBefore = cacheVersionStore.getAllVersion();
 
             // 清空所有缓存
             cacheManager.clear();
 
-            // 验证缓存被清空
-            assertNull(composite.getL1CacheManager().get("user(Sg[N:1])"),
-                "clear() 后 L1 应为空");
+            assertEquals(versionBefore + 1, cacheVersionStore.getAllVersion(),
+                "clear() 应递增全局版本号");
+            assertAbsentFromL1AndL2(composite, userKey, "clear() 后 user 缓存应为空");
+            assertAbsentFromL1AndL2(composite, dictKey, "clear() 后 dict 缓存应为空");
         }
 
         @Test
         @DisplayName("clearByPrefix() 触发单前缀版本号递增")
         void testClearByPrefixIncrementsVersion() {
-            if (!(cacheManager instanceof CompositeCacheManager composite)) {
+            if (!(cacheManager instanceof CompositeCacheManager composite) || cacheVersionStore == null) {
                 return;
             }
+
+            String userKey = "user(Sg[N:1])";
+            String dictKey = "dict(Sg[S:test])";
 
             // 准备不同前缀的缓存
             bingCacheDemos.getUserById(1L);
             bingCacheDemos.getDict("test");
+            assertPresentInL1AndL2(composite, userKey, "clearByPrefix 前 user 缓存应存在");
+            assertPresentInL1AndL2(composite, dictKey, "clearByPrefix 前 dict 缓存应存在");
+
+            long versionBefore = cacheVersionStore.getVersion("user");
 
             // 只清空前缀为 "user" 的缓存
             cacheManager.clearByPrefix("user");
 
-            // 验证 user 缓存被清空
-            // 注意：实际 key 格式为 user(Sg[N:1])，clearByPrefix 会匹配 user(
-            assertNull(composite.getL1CacheManager().get("user(Sg[N:1])"),
-                "clearByPrefix('user') 后 user 缓存应为空");
+            assertEquals(versionBefore + 1, cacheVersionStore.getVersion("user"),
+                "clearByPrefix('user') 应递增 user 版本号");
+            assertAbsentFromL1AndL2(composite, userKey, "clearByPrefix('user') 后 user 缓存应为空");
+            assertPresentInL1AndL2(composite, dictKey, "clearByPrefix('user') 不应清除 dict 缓存");
         }
     }
 
@@ -510,21 +539,24 @@ public class AdvancedBingCacheTest {
             return;
         }
 
+        String userKey1 = "user(Sg[N:1])";
+        String userKey2 = "user(Sg[N:2])";
+        String dictKey = "dict(Sg[S:type1])";
+
         // 准备多条缓存
         bingCacheDemos.getUserById(1L);
         bingCacheDemos.getUserById(2L);
         bingCacheDemos.getDict("type1");
+        assertPresentInL1AndL2(composite, userKey1, "clear 前 user1 缓存应存在");
+        assertPresentInL1AndL2(composite, userKey2, "clear 前 user2 缓存应存在");
+        assertPresentInL1AndL2(composite, dictKey, "clear 前 dict 缓存应存在");
 
         // 清空
         cacheManager.clear();
 
-        // 验证 L1 为空
-        assertNull(composite.getL1CacheManager().get("user(Sg[N:1])"));
-        assertNull(composite.getL1CacheManager().get("user(Sg[N:2])"));
-
-        // 验证 L2 为空
-        assertNull(composite.getL2CacheManager().get("user(Sg[N:1])"));
-        assertNull(composite.getL2CacheManager().get("user(Sg[N:2])"));
+        assertAbsentFromL1AndL2(composite, userKey1, "clear() 后 user1 缓存应为空");
+        assertAbsentFromL1AndL2(composite, userKey2, "clear() 后 user2 缓存应为空");
+        assertAbsentFromL1AndL2(composite, dictKey, "clear() 后 dict 缓存应为空");
     }
 
     @Test
@@ -534,38 +566,52 @@ public class AdvancedBingCacheTest {
             return;
         }
 
+        String userKey = "user(Sg[N:1])";
+        String dictKey = "dict(Sg[S:type1])";
+
         // 准备不同前缀的缓存
         bingCacheDemos.getUserById(1L);
         bingCacheDemos.getDict("type1");
+        assertPresentInL1AndL2(composite, userKey, "clearByPrefix 前 user 缓存应存在");
+        assertPresentInL1AndL2(composite, dictKey, "clearByPrefix 前 dict 缓存应存在");
 
         // 只清除 user 前缀
         cacheManager.clearByPrefix("user");
 
-        // user 应被清除
-        assertNull(composite.getL1CacheManager().get("user(Sg[N:1])"),
-            "user 缓存应被清除");
-
-        // dict 应保留
-        assertNotNull(composite.getL1CacheManager().get("dict(Sg[S:type1])"),
-            "dict 缓存不应被清除");
+        assertAbsentFromL1AndL2(composite, userKey, "user 缓存应被清除");
+        assertPresentInL1AndL2(composite, dictKey, "dict 缓存不应被清除");
     }
 
     @Test
     @DisplayName("前缀碰撞保护 - user 不影响 userDetail")
     void testPrefixCollisionProtection() {
+        if (!(cacheManager instanceof CompositeCacheManager composite)) {
+            return;
+        }
+
+        String userKey = "user(Sg[N:1])";
+        String userDetailKey = "userDetail(Sg[N:1])";
+        BingCacheDemos.UserDetailQuery query = new BingCacheDemos.UserDetailQuery(1L, "test");
+
         // 准备 user 和 userDetail 缓存
-        bingCacheDemos.getUserById(1L);
-        bingCacheDemos.getUserDetail(
-            new BingCacheDemos.UserDetailQuery(1L, "test"));
+        String userBefore = bingCacheDemos.getUserById(1L);
+        String userDetailBefore = bingCacheDemos.getUserDetail(query);
+        assertPresentInL1AndL2(composite, userKey, "clearByPrefix 前 user 缓存应存在");
+        assertPresentInL1AndL2(composite, userDetailKey, "clearByPrefix 前 userDetail 缓存应存在");
 
         // 清除 user 前缀
         cacheManager.clearByPrefix("user");
 
-        // user 应被清除
-        // userDetail 不应被误删
-        String userDetailAfter = bingCacheDemos.getUserDetail(
-            new BingCacheDemos.UserDetailQuery(1L, "test"));
-        assertNotNull(userDetailAfter, "userDetail 不应被 clearByPrefix('user') 误删");
+        assertAbsentFromL1AndL2(composite, userKey, "user 应被 clearByPrefix('user') 清除");
+        assertPresentInL1AndL2(composite, userDetailKey,
+            "userDetail 不应被 clearByPrefix('user') 误删");
+
+        String userDetailAfter = bingCacheDemos.getUserDetail(query);
+        assertEquals(userDetailBefore, userDetailAfter,
+            "userDetail 不应被 clearByPrefix('user') 误删后重算");
+
+        String userAfter = bingCacheDemos.getUserById(1L);
+        assertNotEquals(userBefore, userAfter, "user 被清除后应重新执行方法体");
     }
 
     // ========== 11. clearByPrefix 不影响 group 条目 ==========
@@ -573,24 +619,34 @@ public class AdvancedBingCacheTest {
     @Test
     @DisplayName("clearByPrefix 不影响 group 方式缓存的条目")
     void testClearByPrefixDoesNotAffectGroupEntries() {
+        if (!(cacheManager instanceof CompositeCacheManager composite)) {
+            return;
+        }
+
+        String adminUserKey = "admin:user(Sg[N:801])";
+        String userKey = "user(Sg[N:801])";
+
         // getAdminUser: group="admin", cacheName="user", key=admin:user(...)
         // getUserById:  group 为空,     cacheName="user", key=user(...)
-        bingCacheDemos.getAdminUser(801L);
-        bingCacheDemos.getUserById(801L);
+        String adminBefore = bingCacheDemos.getAdminUser(801L);
+        String userBefore = bingCacheDemos.getUserById(801L);
+        assertPresentInL1AndL2(composite, adminUserKey, "clearByPrefix 前 admin:user 缓存应存在");
+        assertPresentInL1AndL2(composite, userKey, "clearByPrefix 前普通 user 缓存应存在");
 
         // clearByPrefix("user") 只清除 user( 开头的 key
         cacheManager.clearByPrefix("user");
 
-        // 无 group 的 user 应被清除
-        assertNull(cacheManager.get("user(Sg[N:801])"),
+        assertAbsentFromL1AndL2(composite, userKey,
             "clearByPrefix('user') 应清除无 group 的 user 缓存");
+        assertPresentInL1AndL2(composite, adminUserKey,
+            "clearByPrefix('user') 不应影响 group=admin 的 user 缓存");
 
-        // group=admin 的 user 不应被清除（key 格式为 admin:user(...)）
-        // 验证方式：再次调用应命中缓存（返回值不变）
-        String adminBefore = bingCacheDemos.getAdminUser(801L);
         String adminAfter = bingCacheDemos.getAdminUser(801L);
         assertEquals(adminBefore, adminAfter,
             "clearByPrefix('user') 不应影响 group=admin 的 user 缓存");
+
+        String userAfter = bingCacheDemos.getUserById(801L);
+        assertNotEquals(userBefore, userAfter, "无 group 的 user 被清除后应重新执行方法体");
     }
 
     // ========== 12. 重复 clear 稳定性 ==========
@@ -615,38 +671,58 @@ public class AdvancedBingCacheTest {
     @Test
     @DisplayName("clearByGroup + clearByPrefix 交叉 - 互不影响非目标条目")
     void testClearByGroupAndClearByPrefixCrossValidation() {
+        if (!(cacheManager instanceof CompositeCacheManager composite)) {
+            return;
+        }
+
+        String adminUserKey = "admin:user(Sg[N:901])";
+        String userKey = "user(Sg[N:901])";
+        String adminDictKey = "admin:dict(Sg[S:cross-test])";
+        String dictKey = "dict(Sg[S:cross-test])";
+
         // 准备缓存数据
         String adminUserOrig = bingCacheDemos.getAdminUser(901L);
         bingCacheDemos.getUserById(901L);
         String adminDictOrig = bingCacheDemos.getAdminDict("cross-test");
-        bingCacheDemos.getDict("cross-test");
+        String dictOrig = bingCacheDemos.getDict("cross-test");
+        assertPresentInL1AndL2(composite, adminUserKey, "交叉验证前 admin:user 缓存应存在");
+        assertPresentInL1AndL2(composite, userKey, "交叉验证前普通 user 缓存应存在");
+        assertPresentInL1AndL2(composite, adminDictKey, "交叉验证前 admin:dict 缓存应存在");
+        assertPresentInL1AndL2(composite, dictKey, "交叉验证前普通 dict 缓存应存在");
 
         // Step 1: clearByPrefix("user") — 只影响 user( 开头
         cacheManager.clearByPrefix("user");
 
-        // normal user 应被清除
-        assertNull(cacheManager.get("user(Sg[N:901])"),
-            "normal user 应被 clearByPrefix 清除");
-
-        // admin:user 应保留 — 再次调用应命中缓存
-        String adminUserAfter = bingCacheDemos.getAdminUser(901L);
-        assertEquals(adminUserOrig, adminUserAfter,
+        assertAbsentFromL1AndL2(composite, userKey, "normal user 应被 clearByPrefix 清除");
+        assertPresentInL1AndL2(composite, adminUserKey,
             "admin:user 不应被 clearByPrefix('user') 清除");
-
-        // dict 相关缓存不受影响
-        assertNotNull(cacheManager.get("dict(Sg[S:cross-test])"),
+        assertPresentInL1AndL2(composite, adminDictKey,
+            "admin:dict 不应被 clearByPrefix('user') 影响");
+        assertPresentInL1AndL2(composite, dictKey,
             "dict 缓存不应被 clearByPrefix('user') 影响");
+
+        String adminUserAfterPrefixClear = bingCacheDemos.getAdminUser(901L);
+        assertEquals(adminUserOrig, adminUserAfterPrefixClear,
+            "admin:user 不应被 clearByPrefix('user') 清除");
+        assertEquals(dictOrig, bingCacheDemos.getDict("cross-test"),
+            "normal dict 不应被 clearByPrefix('user') 影响");
 
         // Step 2: clearByGroup("admin") — 只影响 admin: 开头
         bingCacheDemos.clearAdminGroup();
 
-        // admin:dict 应被清除
+        assertAbsentFromL1AndL2(composite, adminUserKey, "admin:user 应被 clearByGroup 清除");
+        assertAbsentFromL1AndL2(composite, adminDictKey, "admin:dict 应被 clearByGroup 清除");
+        assertPresentInL1AndL2(composite, dictKey,
+            "keyPrefix=dict 不应被 clearByGroup('admin') 清除");
+
+        String adminUserAfterGroupClear = bingCacheDemos.getAdminUser(901L);
+        assertNotEquals(adminUserOrig, adminUserAfterGroupClear,
+            "admin:user 应被 clearByGroup 清除后重新执行");
+
         String adminDictAfter = bingCacheDemos.getAdminDict("cross-test");
         assertNotEquals(adminDictOrig, adminDictAfter,
-            "admin:dict 应被 clearByGroup 清除");
-
-        // normal dict (keyPrefix) 应保留
-        assertNotNull(cacheManager.get("dict(Sg[S:cross-test])"),
-            "keyPrefix=dict 不应被 clearByGroup('admin') 清除");
+            "admin:dict 应被 clearByGroup 清除后重新执行");
+        assertEquals(dictOrig, bingCacheDemos.getDict("cross-test"),
+            "normal dict 不应被 clearByGroup('admin') 清除");
     }
 }

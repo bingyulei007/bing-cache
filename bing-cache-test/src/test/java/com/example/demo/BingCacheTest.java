@@ -622,11 +622,19 @@ public class BingCacheTest {
     @Test
     void testDemoServiceGetOrderByIdNonNullCached() {
         Long orderId = 500L; // < 1000，返回非 null
+        String cacheKey = "order(Sg[N:500])";
+        long countBefore = demoService.getGetOrderByIdCallCount();
+
         String result1 = demoService.getOrderById(orderId);
         assertNotNull(result1, "有效 orderId 应返回非 null");
+        long countAfterFirst = demoService.getGetOrderByIdCallCount();
+        assertEquals(countBefore + 1, countAfterFirst, "首次调用应执行方法体");
+        assertNotNull(cacheManager.get(cacheKey), "非 null order 结果应写入缓存");
 
         String result2 = demoService.getOrderById(orderId);
         assertEquals(result1, result2, "非 null 结果应被缓存");
+        assertEquals(countAfterFirst, demoService.getGetOrderByIdCallCount(),
+            "非 null 结果应被缓存，第二次不应重新执行方法");
     }
 
     // ========== cacheNullValue=false 行为验证 ==========
@@ -641,20 +649,35 @@ public class BingCacheTest {
     void testNoCacheNullValueReExecutes() {
         Long invalidId = -1L;
         Long validId = 1L;
+        String invalidKey = "non-nullable(Sg[N:-1])";
+        String validKey = "non-nullable(Sg[N:1])";
+        long countBefore = cacheDemoExamples.getNoCacheNullValueCallCount();
 
-        // 第一次返回 null
+        // 第一次返回 null，且 null 不应写入缓存
         String nullResult1 = cacheDemoExamples.noCacheNullValue(invalidId);
         assertNull(nullResult1);
+        long countAfterFirstNull = cacheDemoExamples.getNoCacheNullValueCallCount();
+        assertEquals(countBefore + 1, countAfterFirstNull, "首次 null 查询应执行方法体");
+        assertNull(cacheManager.get(invalidKey), "cacheNullValue=false 时 null 不应写入缓存");
 
         // 有效 id 确认缓存机制正常
         String validResult1 = cacheDemoExamples.noCacheNullValue(validId);
+        assertNotNull(validResult1);
+        long countAfterValidFirst = cacheDemoExamples.getNoCacheNullValueCallCount();
+        assertEquals(countAfterFirstNull + 1, countAfterValidFirst, "首次非 null 查询应执行方法体");
+        assertNotNull(cacheManager.get(validKey), "非 null 结果应写入缓存");
+
         String validResult2 = cacheDemoExamples.noCacheNullValue(validId);
         assertEquals(validResult1, validResult2, "非 null 结果应被缓存");
-        assertNotNull(validResult1);
+        assertEquals(countAfterValidFirst, cacheDemoExamples.getNoCacheNullValueCallCount(),
+            "非 null 结果命中缓存时不应重新执行方法");
 
         // 再次用无效 id — 方法应被重新执行（null 未被缓存），仍返回 null
         String nullResult2 = cacheDemoExamples.noCacheNullValue(invalidId);
         assertNull(nullResult2, "cacheNullValue=false 时 null 不应被缓存，应重新执行");
+        assertEquals(countAfterValidFirst + 1, cacheDemoExamples.getNoCacheNullValueCallCount(),
+            "cacheNullValue=false 时重复 null 查询应重新执行方法体");
+        assertNull(cacheManager.get(invalidKey), "重复 null 查询后仍不应写入缓存");
     }
 
     // ========== 缓存 null 值驱逐后重新查询 ==========
@@ -665,18 +688,30 @@ public class BingCacheTest {
     @Test
     void testEvictCachedNullValue() {
         Long nonExistId = -9999L;
+        String cacheKey = "nullable(Sg[N:-9999])";
+        long countBefore = cacheDemoExamples.getCacheNullValueCallCount();
 
         // 缓存 null
         assertNull(cacheDemoExamples.cacheNullValue(nonExistId));
+        long countAfterFirst = cacheDemoExamples.getCacheNullValueCallCount();
+        assertEquals(countBefore + 1, countAfterFirst, "首次 null 查询应执行方法体");
+        assertNotNull(cacheManager.get(cacheKey), "cacheNullValue=true 时 null sentinel 应写入缓存");
+
         // 从缓存获取 null
         assertNull(cacheDemoExamples.cacheNullValue(nonExistId));
+        assertEquals(countAfterFirst, cacheDemoExamples.getCacheNullValueCallCount(),
+            "缓存的 null 应命中，方法体不应重新执行");
 
         // 驱逐（通过 clearByPrefix 清除 nullable 前缀的所有缓存）
         cacheManager.clearByPrefix("nullable");
+        assertNull(cacheManager.get(cacheKey), "clearByPrefix('nullable') 后 cached null 应被清除");
 
         // 驱逐后重新查询 — 方法应被重新执行（结果仍为 null）
         String result = cacheDemoExamples.cacheNullValue(nonExistId);
-        assertNull(result, "驱逐后重新查询应重新执行方法");
+        assertNull(result, "驱逐后重新查询业务结果仍为 null");
+        assertEquals(countAfterFirst + 1, cacheDemoExamples.getCacheNullValueCallCount(),
+            "驱逐后重新查询应重新执行方法体");
+        assertNotNull(cacheManager.get(cacheKey), "驱逐后重新查询应重新写入 null sentinel");
     }
 
     // ========== null 参数边界测试 ==========
