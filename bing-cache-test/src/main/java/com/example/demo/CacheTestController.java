@@ -19,6 +19,9 @@ public class CacheTestController {
     @Autowired
     private CacheDemoExamples cacheDemoExamples;
 
+    @Autowired
+    private BingCacheDemos bingCacheDemos;
+
     // ========== 基础缓存测试 ==========
 
     /**
@@ -170,6 +173,162 @@ public class CacheTestController {
         return result;
     }
 
+
+    // ========== 精确清除测试 ==========
+
+    /**
+     * GET /cache-test/evict/user?id=1&name=Alice
+     * 测试 cacheName + argIndexes 的单 key 清除
+     */
+    @GetMapping("/evict/user")
+    public Map<String, Object> testUserEvict(
+            @RequestParam(defaultValue = "1") Long id,
+            @RequestParam(defaultValue = "Alice") String name) {
+        Map<String, Object> result = new HashMap<>();
+
+        String first = bingCacheDemos.getUserById(id);
+        String second = bingCacheDemos.getUserById(id);
+        bingCacheDemos.updateUser(id, name);
+        String afterEvict = bingCacheDemos.getUserById(id);
+
+        result.put("第一次", first);
+        result.put("第二次", second);
+        result.put("清除动作", "updateUser");
+        result.put("清除后", afterEvict);
+        result.put("清除前是否命中", Objects.equals(first, second));
+        result.put("清除后是否重算", !Objects.equals(second, afterEvict));
+        return result;
+    }
+
+    /**
+     * GET /cache-test/evict/dict?dictType=gender&value=new
+     * 测试 keyPrefix 精确清除
+     */
+    @GetMapping("/evict/dict")
+    public Map<String, Object> testDictEvict(
+            @RequestParam(defaultValue = "gender") String dictType,
+            @RequestParam(defaultValue = "new") String value) {
+        Map<String, Object> result = new HashMap<>();
+
+        String first = bingCacheDemos.getDict(dictType);
+        String second = bingCacheDemos.getDict(dictType);
+        bingCacheDemos.updateDict(dictType, value);
+        String afterEvict = bingCacheDemos.getDict(dictType);
+
+        result.put("第一次", first);
+        result.put("第二次", second);
+        result.put("清除动作", "updateDict");
+        result.put("清除后", afterEvict);
+        result.put("清除前是否命中", Objects.equals(first, second));
+        result.put("清除后是否重算", !Objects.equals(second, afterEvict));
+        return result;
+    }
+
+    /**
+     * GET /cache-test/evict/user-detail?id=1&source=app&name=Alice
+     * 测试 SpEL 精确清除
+     */
+    @GetMapping("/evict/user-detail")
+    public Map<String, Object> testUserDetailEvict(
+            @RequestParam(defaultValue = "1") Long id,
+            @RequestParam(defaultValue = "app") String source,
+            @RequestParam(defaultValue = "Alice") String name) {
+        Map<String, Object> result = new HashMap<>();
+        BingCacheDemos.UserDetailQuery query = new BingCacheDemos.UserDetailQuery(id, source);
+
+        String first = bingCacheDemos.getUserDetail(query);
+        String second = bingCacheDemos.getUserDetail(query);
+        bingCacheDemos.updateUserDetail(query, name);
+        String afterEvict = bingCacheDemos.getUserDetail(query);
+
+        result.put("第一次", first);
+        result.put("第二次", second);
+        result.put("清除动作", "updateUserDetail");
+        result.put("清除后", afterEvict);
+        result.put("清除前是否命中", Objects.equals(first, second));
+        result.put("清除后是否重算", !Objects.equals(second, afterEvict));
+        return result;
+    }
+
+
+    /**
+     * GET /cache-test/evict/multi-cache?userId=1&name=Alice
+     * 测试多个 @BingCacheEvict 协同清除
+     */
+    @GetMapping("/evict/multi-cache")
+    public Map<String, Object> testMultiCacheEvict(
+            @RequestParam(defaultValue = "1") Long userId,
+            @RequestParam(defaultValue = "Alice") String name) {
+        Map<String, Object> result = new HashMap<>();
+
+        String accountFirst = bingCacheDemos.getUserAccount(userId);
+        String accountSecond = bingCacheDemos.getUserAccount(userId);
+        String ordersFirst = bingCacheDemos.getUserOrders(userId);
+        String ordersSecond = bingCacheDemos.getUserOrders(userId);
+
+        bingCacheDemos.updateUserAccount(userId, name);
+
+        String accountAfterEvict = bingCacheDemos.getUserAccount(userId);
+        String ordersAfterEvict = bingCacheDemos.getUserOrders(userId);
+
+        result.put("清除动作", "updateUserAccount");
+        result.put("账号缓存", buildEvictResult(accountFirst, accountSecond, accountAfterEvict));
+        result.put("订单缓存", buildEvictResult(ordersFirst, ordersSecond, ordersAfterEvict));
+        return result;
+    }
+
+    /**
+     * GET /cache-test/evict/group?id=1&dictType=type1
+     * 测试 group 分组清除
+     */
+    @GetMapping("/evict/group")
+    public Map<String, Object> testGroupEvict(
+            @RequestParam(defaultValue = "1") Long id,
+            @RequestParam(defaultValue = "type1") String dictType) {
+        Map<String, Object> result = new HashMap<>();
+
+        String userFirst = bingCacheDemos.getAdminUser(id);
+        String userSecond = bingCacheDemos.getAdminUser(id);
+        String dictFirst = bingCacheDemos.getAdminDict(dictType);
+        String dictSecond = bingCacheDemos.getAdminDict(dictType);
+
+        bingCacheDemos.clearAdminGroup();
+
+        String userAfterEvict = bingCacheDemos.getAdminUser(id);
+        String dictAfterEvict = bingCacheDemos.getAdminDict(dictType);
+
+        result.put("清除动作", "clearAdminGroup");
+        result.put("管理员用户缓存", buildEvictResult(userFirst, userSecond, userAfterEvict));
+        result.put("管理员字典缓存", buildEvictResult(dictFirst, dictSecond, dictAfterEvict));
+        return result;
+    }
+
+    /**
+     * GET /cache-test/evict/all?userId=1&dictType=type1
+     * 测试全局清除所有缓存
+     */
+    @GetMapping("/evict/all")
+    public Map<String, Object> testClearAll(
+            @RequestParam(defaultValue = "1") Long userId,
+            @RequestParam(defaultValue = "type1") String dictType) {
+        Map<String, Object> result = new HashMap<>();
+
+        String userFirst = bingCacheDemos.getUserById(userId);
+        String userSecond = bingCacheDemos.getUserById(userId);
+        String dictFirst = bingCacheDemos.getDict(dictType);
+        String dictSecond = bingCacheDemos.getDict(dictType);
+
+        bingCacheDemos.clearAll();
+
+        String userAfterEvict = bingCacheDemos.getUserById(userId);
+        String dictAfterEvict = bingCacheDemos.getDict(dictType);
+
+        result.put("清除动作", "clearAll");
+        result.put("用户缓存", buildEvictResult(userFirst, userSecond, userAfterEvict));
+        result.put("字典缓存", buildEvictResult(dictFirst, dictSecond, dictAfterEvict));
+        return result;
+    }
+
     // ========== 性能对比测试 ==========
 
     /**
@@ -253,6 +412,17 @@ public class CacheTestController {
         return result;
     }
 
+
+    private Map<String, Object> buildEvictResult(String first, String second, String afterEvict) {
+        Map<String, Object> item = new HashMap<>();
+        item.put("第一次", first);
+        item.put("第二次", second);
+        item.put("清除后", afterEvict);
+        item.put("清除前是否命中", Objects.equals(first, second));
+        item.put("清除后是否重算", !Objects.equals(second, afterEvict));
+        return item;
+    }
+
     // ========== 缓存状态探测 ==========
 
     /**
@@ -263,15 +433,21 @@ public class CacheTestController {
     public Map<String, Object> status() {
         Map<String, Object> result = new HashMap<>();
         result.put("status", "running");
-        result.put("测试接口", Map.of(
-                "基础缓存", "GET /cache-test/basic?userId=1001",
-                "过期测试", "GET /cache-test/expire?symbol=AAPL",
-                "穿透测试", "GET /cache-test/penetration?id=9999",
-                "多参数", "GET /cache-test/multi?category=x&keyword=y&page=1",
-                "列表缓存", "GET /cache-test/list?category=electronics",
-                "对象参数", "POST /cache-test/object",
-                "性能对比", "GET /cache-test/performance",
-                "批量测试", "GET /cache-test/batch"
+        result.put("测试接口", Map.ofEntries(
+                Map.entry("基础缓存", "GET /cache-test/basic?userId=1001"),
+                Map.entry("过期测试", "GET /cache-test/expire?symbol=AAPL"),
+                Map.entry("穿透测试", "GET /cache-test/penetration?id=9999"),
+                Map.entry("多参数", "GET /cache-test/multi?category=x&keyword=y&page=1"),
+                Map.entry("列表缓存", "GET /cache-test/list?category=electronics"),
+                Map.entry("对象参数", "POST /cache-test/object"),
+                Map.entry("单key清除", "GET /cache-test/evict/user?id=1&name=Alice"),
+                Map.entry("keyPrefix清除", "GET /cache-test/evict/dict?dictType=gender&value=new"),
+                Map.entry("SpEL清除", "GET /cache-test/evict/user-detail?id=1&source=app&name=Alice"),
+                Map.entry("多缓存协同清除", "GET /cache-test/evict/multi-cache?userId=1&name=Alice"),
+                Map.entry("分组清除", "GET /cache-test/evict/group?id=1&dictType=type1"),
+                Map.entry("全局清空", "GET /cache-test/evict/all?userId=1&dictType=type1"),
+                Map.entry("性能对比", "GET /cache-test/performance"),
+                Map.entry("批量测试", "GET /cache-test/batch")
         ));
         return result;
     }
