@@ -15,44 +15,6 @@
 - **确定性 Key**：基于 Jackson 序列化生成 key，不依赖 `toString()`，重启后保持一致
 - **自动装配**：Spring Boot Starter 一键引入，根据 classpath 和配置自动选择缓存模式
 
-## 仓库结构
-
-本仓库使用 Maven 多模块结构：
-
-```text
-bing-cache/
-├── pom.xml              # 父 POM / reactor 聚合工程，统一管理版本、依赖和插件
-├── bing-cache-core/     # 核心 starter 源码与单元测试，发布 artifactId 仍为 bing-cache
-│   ├── src/main/java/com/bing/cache/
-│   └── src/test/java/com/bing/cache/
-└── bing-cache-test/     # 集成测试模块，依赖当前 reactor 中的 bing-cache
-    ├── src/main/java/com/example/demo/
-    └── src/test/java/com/example/demo/
-```
-
-对外依赖坐标保持不变：`cn.com.bingbing:bing-cache:1.1-SNAPSHOT`。业务项目继续依赖该坐标即可，不需要依赖 `bing-cache-core` 这个目录名。
-
-## 构建
-
-常用构建命令：
-
-```bash
-# 全量构建
-mvn clean verify
-
-# 安装父 POM 和所有模块到本地 Maven 仓库
-mvn clean install
-
-# 推荐：只安装业务使用所需的 parent + core 到本地 Maven 仓库
-mvn clean install -pl bing-cache-core -am
-
-# 只验证核心模块
-mvn -pl bing-cache-core -am verify
-
-# 构建集成测试模块，并自动构建核心依赖
-mvn -pl bing-cache-test -am verify
-```
-
 ## 快速开始
 
 ### 1. 引入依赖
@@ -519,7 +481,7 @@ public class UserService {
 | 业务方法返回 null 且 `cacheNullValue = true` | 写入 L1 null 占位符，后续本实例命中后还原为 null 返回；NullValue 不写入 L2 Redis |
 | L2 命中但 TTL 查询返回 `-2` 或 `0` | 跳过 L1 回填，避免创建已经过期或即将过期的本地脏数据 |
 | 单 key `evict()` / `@BingCacheEvict(allEntries = false)` 或 `@BingCacheEvict(cacheName = "user", allEntries = false)` | 仅清除当前实例 L1 和 Redis L2 中的这个完整 key，并通过 Redis Pub/Sub 通知其他实例清除同一个 key；**即使配置了 `cacheName`，也不递增 cacheName/group/全局版本号，因此不会触发版本对账去清空同 cacheName 下的所有缓存**。若 Pub/Sub 丢失，只能依赖 `l1-max-ttl` 等待其他实例 L1 中该 key 过期 |
-| `clear()` / `@BingCacheEvict(allEntries = true)` | 清除当前实例缓存并发布 Pub/Sub；在二级缓存模式下递增版本号，可由版本对账补偿 Pub/Sub 丢失 |
+| `clear()` / `clearByPrefix()` / `clearByGroup()` / `@BingCacheEvict(allEntries = true)` | 清除当前实例缓存并发布 Pub/Sub；在二级缓存模式下递增版本号（`clear`→全局版本、`clearByPrefix`→cacheName 版本、`clearByGroup`→group 版本），可由版本对账补偿 Pub/Sub 丢失 |
 
 ## 缓存架构
 
@@ -577,15 +539,17 @@ L1 未命中但 L2 命中时，L2 的值会回填到 L1。回填时通过 Redis 
 
 作为 Pub/Sub 消息丢失的补偿，组件提供版本对账机制：
 
-1. **版本号存储**：Redis 中维护每个 cacheName 的版本号
-   - Key 格式：`bing-cache:__version__:{cacheName}`
+1. **版本号存储**：Redis 中维护每个 cacheName / group 的版本号
+   - cacheName 版本：`bing-cache:__version__:{cacheName}`
    - 全局版本：`bing-cache:__version__:__all__`
-   - `clear()` 递增全局版本号；`clearByPrefix(prefix)` 递增对应 cacheName 的版本号
+   - group 版本：`bing-cache:__version__:__group__:{group}`
+   - `clear()` 递增全局版本号；`clearByPrefix(prefix)` 递增对应 cacheName 的版本号；`clearByGroup(group)` 递增对应 group 的版本号
    - **单 key `evict(key)` 不递增版本号**（见下方"对账范围限制"）
 
 2. **定时对账**：`CacheReconciliationService` 每隔 `interval` 秒检查版本号变化
    - 发现全局版本变化 → 清空所有 L1 缓存
    - 发现 cacheName 版本变化 → 按前缀清空 L1 缓存
+   - 发现 group 版本变化 → 按 group 清空 L1 缓存
    - 版本无变化 → 不做任何操作
    - 服务启动后立即执行首次对账（initialDelay=0）
 
@@ -595,12 +559,12 @@ L1 未命中但 L2 命中时，L2 的值会回填到 L1。回填时通过 Redis 
    - 可配合 `l1-max-ttl` 使用，作为双重保障
 
 4. **对账范围限制（重要）**：
-   - 对账只补偿 `clear()` 和 `clearByPrefix(prefix)` 的 Pub/Sub 丢失，因为这两类操作会递增版本号。
+   - 对账补偿 `clear()`、`clearByPrefix(prefix)` 和 `clearByGroup(group)` 的 Pub/Sub 丢失，因为这三类操作会递增版本号。
    - **单 key `evict(key)` 的 Pub/Sub 丢失无法通过对账补偿**。原因：单 key evict 若按 key 写版本号，Redis 中会产生与业务 key 数量等量的 version 键，无限膨胀。
    - 因此单 key evict 的跨实例失效完全依赖 Pub/Sub 实时送达；若 Pub/Sub 丢失，受影响实例只能通过 `l1-max-ttl` 自然过期兜底。
    - 对一致性要求高的单 key 场景，建议：
      - 设置合理的 `l1-max-ttl`（如 300 秒）作为兜底
-     - 或改用 `@BingCacheEvict(allEntries = true)` 触发 `clearByPrefix`，享受对账补偿
+     - 或改用 `@BingCacheEvict(allEntries = true)` 触发 `clearByPrefix` / `clearByGroup`，享受对账补偿
 
 ### Redis 降级与恢复
 
@@ -758,23 +722,42 @@ logging:
     com.bing.cache: DEBUG
 ```
 
-日志输出示例：
+日志分两层：**切面层**（`CacheAspect` / `CacheEvictAspect`）在纯 L1 和 L1+L2 两种模式下都会输出；**二级缓存层**（`CompositeCacheManager` / `RedisCacheManager`）仅在 L1+L2 模式下额外输出。
+
+切面层日志（两种模式都会输出）：
 
 ```
-DEBUG Cache hit: user(Sg[N:1])                        # 缓存命中
-DEBUG Cache miss: user(Sg[N:1])                       # 缓存未命中
-DEBUG Cache put: user(Sg[N:1])                        # 缓存写入
-DEBUG Cache put (null value): user(Sg[N:999])         # null 值缓存写入
-DEBUG Cache skip (null result): user(Sg[N:999])       # null 结果跳过缓存
-DEBUG Cache evict: user(Sg[N:1])                      # 缓存清除
-DEBUG Cache clear by prefix: user                    # 按前缀清除
-DEBUG Cache clear all entries                        # 全局清空
-DEBUG L1 cache hit: user(Sg[N:1])                     # L1 命中（二级缓存模式）
-DEBUG L2 cache hit, backfilling L1: user(Sg[N:1])     # L2 命中回填 L1（二级缓存模式）
-DEBUG L1+L2 cache miss: user(Sg[N:1])                 # L1 和 L2 均未命中（二级缓存模式）
-DEBUG Redis cache hit: bing-cache:user(Sg[N:1])       # Redis 缓存命中
-WARN  Bing Cache: Redis L2 cache has failed 3 consecutive times, degraded to L1-only mode  # Redis 降级
-INFO  Bing Cache: Redis L2 cache has recovered from degradation                        # Redis 恢复
+DEBUG Cache hit: user(Sg[N:1])                     # 缓存命中
+DEBUG Cache hit (null sentinel): user(Sg[N:999])   # 命中 null 占位符（cacheNullValue=true）
+DEBUG Cache miss: user(Sg[N:1])                    # 缓存未命中
+DEBUG Cache put: user(Sg[N:1])                    # 缓存写入
+DEBUG Cache put (null value): user(Sg[N:999])      # null 值缓存写入
+DEBUG Cache skip (null result): user(Sg[N:999])    # null 结果跳过缓存
+DEBUG Cache evict: user(Sg[N:1])                   # 单 key 清除
+DEBUG Cache clear by prefix: user                  # 按前缀清除（allEntries + cacheName/keyPrefix）
+DEBUG Cache clear by group: admin                  # 按 group 清除（allEntries + 仅 group）
+DEBUG Cache clear all entries                      # 全局清空（allEntries，无 cacheName/keyPrefix/group）
+```
+
+二级缓存层日志（仅 L1+L2 模式额外输出）：
+
+```
+DEBUG L1 cache hit: user(Sg[N:1])                     # L1 命中
+DEBUG L2 cache hit, backfilling L1: user(Sg[N:1])     # L2 命中并回填 L1
+DEBUG L1+L2 cache miss: user(Sg[N:1])                 # L1 和 L2 均未命中
+DEBUG Redis cache hit: bing-cache:user(Sg[N:1])       # Redis 命中
+DEBUG Cache put (L1+L2): user(Sg[N:1])                # L1+L2 同时写入
+DEBUG Cache evict (L2+L1+pub): user(Sg[N:1])          # L2+L1 清除并发布 Pub/Sub
+DEBUG Cache clear by prefix (L2+L1+pub): user         # 按前缀清除（L2+L1+Pub/Sub）
+DEBUG Cache clear (L2+L1+pub)                         # 全局清空（L2+L1+Pub/Sub）
+```
+
+Redis 降级与恢复：
+
+```
+WARN  Bing Cache: Redis L2 cache has failed 3 consecutive times, degraded to L1-only mode. Check Redis connectivity.  # 连续失败 3 次降级
+WARN  Bing Cache: Redis L2 cache still degraded. ...                                                                  # 降级期间按 failure-log-interval 限流的摘要日志
+INFO  Bing Cache: Redis L2 cache has recovered from degradation                                                        # 连续成功 3 次恢复
 ```
 
 ## 注意事项
@@ -783,7 +766,7 @@ INFO  Bing Cache: Redis L2 cache has recovered from degradation                 
 
 2. **Redis Pub/Sub 依赖 Redis 二级缓存模式**：跨实例缓存失效通知使用 Redis Pub/Sub 实现。没有 Redis 依赖、Redis 连接不可用，或 `bing.cache.redis.enabled=false` 时，组件以纯 L1 模式运行，`evict()` / `@BingCacheEvict` 只能清除当前 JVM 实例的本地缓存，不能通知其他实例。
 
-3. **Redis Pub/Sub 不保证送达**：失效消息基于 Redis Pub/Sub 广播，属于 fire-and-forget 模式。极端情况下（如网络抖动），其他实例可能收不到失效通知，导致短时间内读到旧数据。**注意：版本对账机制只补偿 `clear()` 和 `clearByPrefix()` 的 Pub/Sub 丢失，单 key `evict()` 的丢失无法补偿**（详见"版本对账机制 → 对账范围限制"）。建议生产环境设置 `l1-max-ttl` 作为兜底。
+3. **Redis Pub/Sub 不保证送达**：失效消息基于 Redis Pub/Sub 广播，属于 fire-and-forget 模式。极端情况下（如网络抖动），其他实例可能收不到失效通知，导致短时间内读到旧数据。**注意：版本对账机制只补偿 `clear()`、`clearByPrefix()` 和 `clearByGroup()` 的 Pub/Sub 丢失，单 key `evict()` 的丢失无法补偿**（详见"缓存架构 → 版本对账机制 → 对账范围限制"）。建议生产环境设置 `l1-max-ttl` 作为兜底。
 
 4. **适用场景**：本组件适用于读多写少、对缓存一致性要求为最终一致的业务场景（如字典数据、用户信息、配置信息等）。不适合频繁更新且要求强一致性的业务。
 
@@ -793,7 +776,7 @@ INFO  Bing Cache: Redis L2 cache has recovered from degradation                 
 
 7. **Redis 依赖可选**：`spring-boot-starter-data-redis` 的 scope 为 `provided`，由使用者项目按需引入。没有 Redis 依赖时，组件自动以纯 L1 模式运行。
 
-8. **`allEntries` 清除范围**：`@BingCacheEvict(allEntries = true)` 配合 `cacheName` 或 `keyPrefix` 时，只清除该前缀下的缓存条目；都不指定时才全局清空。
+8. **`allEntries` 清除范围**：`@BingCacheEvict(allEntries = true)` 配合 `cacheName` 或 `keyPrefix` 时，只清除该前缀下的缓存条目；仅指定 `group`（无 cacheName/keyPrefix）时按 group 清除；都不指定时才全局清空。
 
 9. **`clearByPrefix` 精确匹配语义**：`cacheManager.clearByPrefix(prefix)` 内部匹配 `prefix + "("` 开头的 key，确保只清除指定 cacheName 的缓存，不会误删前缀相同的其他 cacheName（如 `clearByPrefix("user")` 不会误删 `userDetail` 的 key）。Redis SCAN 的 glob 结果会通过 `startsWith` 二次过滤，`prefix` 中的 `*`、`?` 等元字符被当作字面字符处理。
 
@@ -834,3 +817,39 @@ mvn clean test -Pboot-3.5
 - Jackson（key 生成 + Redis 序列化）
 - JUnit 5 + Mockito（单元测试）
 - Testcontainers（集成测试）
+
+## 仓库结构与构建
+
+本仓库使用 Maven 多模块结构：
+
+```text
+bing-cache/
+├── pom.xml              # 父 POM / reactor 聚合工程，统一管理版本、依赖和插件
+├── bing-cache-core/     # 核心 starter 源码与单元测试，发布 artifactId 仍为 bing-cache
+│   ├── src/main/java/com/bing/cache/
+│   └── src/test/java/com/bing/cache/
+└── bing-cache-test/     # 集成测试模块，依赖当前 reactor 中的 bing-cache
+    ├── src/main/java/com/example/demo/
+    └── src/test/java/com/example/demo/
+```
+
+对外依赖坐标保持不变：`cn.com.bingbing:bing-cache:1.1-SNAPSHOT`。业务项目继续依赖该坐标即可，不需要依赖 `bing-cache-core` 这个目录名。
+
+常用构建命令：
+
+```bash
+# 全量构建
+mvn clean verify
+
+# 安装父 POM 和所有模块到本地 Maven 仓库
+mvn clean install
+
+# 推荐：只安装业务使用所需的 parent + core 到本地 Maven 仓库
+mvn clean install -pl bing-cache-core -am
+
+# 只验证核心模块
+mvn -pl bing-cache-core -am verify
+
+# 构建集成测试模块，并自动构建核心依赖
+mvn -pl bing-cache-test -am verify
+```

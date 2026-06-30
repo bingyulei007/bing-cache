@@ -54,7 +54,9 @@ mvn -pl bing-cache-test -am spring-boot:run
 
 ## 测试覆盖
 
-### BingCacheTest（自动化回归，`src/test/`，25 个用例）
+> 下表列出主要测试方法及其验证要点，方便快速定位；**用例数量以 `mvn test` 实际输出为准**，不在此固定计数，避免随用例增减而过期。
+
+### BingCacheTest（自动化回归，`src/test/`）
 
 | 测试方法 | 验证要点 |
 |----------|----------|
@@ -81,7 +83,7 @@ mvn -pl bing-cache-test -am spring-boot:run
 | `testEvict_byKeyPrefix` | keyPrefix 配对精确失效 |
 | `testEvict_beforeInvocation_evenOnException` | `beforeInvocation=true`：方法抛异常时缓存仍被清除 |
 
-### AdvancedBingCacheTest（自动化回归，`src/test/`，24 个用例）
+### AdvancedBingCacheTest（自动化回归，`src/test/`）
 
 | 测试方法 | 验证要点 |
 |----------|----------|
@@ -168,10 +170,29 @@ GET    /demo/guide                              返回各场景的操作步骤
 
 ### `/cache-test` — 批量快速验证
 
+`/cache-test/status` 返回全部入口清单，可据此发现以下接口：
+
 ```
-GET  /cache-test/status         缓存服务状态
-GET  /cache-test/basic?userId=1001
-GET  /cache-test/batch
+# 状态
+GET  /cache-test/status                              缓存服务状态 + 接口清单
+
+# 基础行为
+GET  /cache-test/basic?userId=1001                   基础缓存命中（看第二次耗时）
+GET  /cache-test/expire?symbol=AAPL                  短 TTL 过期（5s 后重新执行）
+GET  /cache-test/penetration?id=9999                 null 值缓存防穿透（id>1000 返回 null）
+GET  /cache-test/multi?category=x&keyword=y&page=1   多参数缓存 key
+GET  /cache-test/list?category=electronics           List 返回值缓存
+POST /cache-test/object                               对象参数缓存（请求体 UserQuery）
+GET  /cache-test/performance                          有/无缓存性能对比
+GET  /cache-test/batch                                一次跑完多个场景
+
+# 缓存清除（返回 清除前是否命中 / 清除后是否重算）
+GET  /cache-test/evict/user?id=1&name=Alice                         单 key 清除（cacheName+argIndexes）
+GET  /cache-test/evict/dict?dictType=gender&value=new              keyPrefix 配对清除
+GET  /cache-test/evict/user-detail?id=1&source=app&name=Alice      SpEL 配对清除
+GET  /cache-test/evict/multi-cache?userId=1&name=Alice             多 @BingCacheEvict 协同清除
+GET  /cache-test/evict/group?id=1&dictType=type1                   group 分组清除
+GET  /cache-test/evict/all?userId=1&dictType=type1                 全局清空
 ```
 
 ---
@@ -199,8 +220,8 @@ bing-cache-test/
 │   │       └── application-instance3.yml      多实例 port 8083
 │   └── test/
 │       └── java/com/example/demo/
-│           ├── BingCacheTest.java             单实例功能回归测试（25 个用例）
-│           ├── AdvancedBingCacheTest.java     高级功能测试（24 个用例）
+│           ├── BingCacheTest.java             单实例功能回归测试
+│           ├── AdvancedBingCacheTest.java     高级功能测试
 │           └── MultiInstanceCacheTest.java    多实例集成测试（需手动启用）
 ├── MULTI_INSTANCE_TEST.md          多实例测试详细说明
 └── README.md                       本文档
