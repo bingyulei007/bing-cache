@@ -253,7 +253,7 @@ public class CacheTestController {
 
     /**
      * GET /cache-test/evict/multi-cache?userId=1&name=Alice
-     * 测试多个 @BingCacheEvict 协同清理
+     * 测试多个 @BingCacheEvict 协同清除
      */
     @GetMapping("/evict/multi-cache")
     public Map<String, Object> testMultiCacheEvict(
@@ -271,7 +271,7 @@ public class CacheTestController {
         String accountAfterEvict = bingCacheDemos.getUserAccount(userId);
         String ordersAfterEvict = bingCacheDemos.getUserOrders(userId);
 
-        result.put("操作方法", "updateUserAccount");
+        result.put("清除动作", "updateUserAccount");
         result.put("账号缓存", buildEvictResult(accountFirst, accountSecond, accountAfterEvict));
         result.put("订单缓存", buildEvictResult(ordersFirst, ordersSecond, ordersAfterEvict));
         return result;
@@ -279,7 +279,7 @@ public class CacheTestController {
 
     /**
      * GET /cache-test/evict/group?id=1&dictType=type1
-     * 测试 group 分组清理
+     * 测试 group 分组清除
      */
     @GetMapping("/evict/group")
     public Map<String, Object> testGroupEvict(
@@ -297,7 +297,7 @@ public class CacheTestController {
         String userAfterEvict = bingCacheDemos.getAdminUser(id);
         String dictAfterEvict = bingCacheDemos.getAdminDict(dictType);
 
-        result.put("操作方法", "clearAdminGroup");
+        result.put("清除动作", "clearAdminGroup");
         result.put("管理员用户缓存", buildEvictResult(userFirst, userSecond, userAfterEvict));
         result.put("管理员字典缓存", buildEvictResult(dictFirst, dictSecond, dictAfterEvict));
         return result;
@@ -305,7 +305,7 @@ public class CacheTestController {
 
     /**
      * GET /cache-test/evict/all?userId=1&dictType=type1
-     * 测试全局清理所有缓存
+     * 测试全局清除所有缓存
      */
     @GetMapping("/evict/all")
     public Map<String, Object> testClearAll(
@@ -323,7 +323,7 @@ public class CacheTestController {
         String userAfterEvict = bingCacheDemos.getUserById(userId);
         String dictAfterEvict = bingCacheDemos.getDict(dictType);
 
-        result.put("操作方法", "clearAll");
+        result.put("清除动作", "clearAll");
         result.put("用户缓存", buildEvictResult(userFirst, userSecond, userAfterEvict));
         result.put("字典缓存", buildEvictResult(dictFirst, dictSecond, dictAfterEvict));
         return result;
@@ -417,9 +417,9 @@ public class CacheTestController {
         Map<String, Object> item = new HashMap<>();
         item.put("第一次", first);
         item.put("第二次", second);
-        item.put("清理后", afterEvict);
-        item.put("清理前是否缓存", Objects.equals(first, second));
-        item.put("清理后是否刷新", !Objects.equals(second, afterEvict));
+        item.put("清除后", afterEvict);
+        item.put("清除前是否命中", Objects.equals(first, second));
+        item.put("清除后是否重算", !Objects.equals(second, afterEvict));
         return item;
     }
 
