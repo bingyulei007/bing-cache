@@ -250,6 +250,85 @@ public class CacheTestController {
         return result;
     }
 
+
+    /**
+     * GET /cache-test/evict/multi-cache?userId=1&name=Alice
+     * 测试多个 @BingCacheEvict 协同清理
+     */
+    @GetMapping("/evict/multi-cache")
+    public Map<String, Object> testMultiCacheEvict(
+            @RequestParam(defaultValue = "1") Long userId,
+            @RequestParam(defaultValue = "Alice") String name) {
+        Map<String, Object> result = new HashMap<>();
+
+        String accountFirst = bingCacheDemos.getUserAccount(userId);
+        String accountSecond = bingCacheDemos.getUserAccount(userId);
+        String ordersFirst = bingCacheDemos.getUserOrders(userId);
+        String ordersSecond = bingCacheDemos.getUserOrders(userId);
+
+        bingCacheDemos.updateUserAccount(userId, name);
+
+        String accountAfterEvict = bingCacheDemos.getUserAccount(userId);
+        String ordersAfterEvict = bingCacheDemos.getUserOrders(userId);
+
+        result.put("操作方法", "updateUserAccount");
+        result.put("账号缓存", buildEvictResult(accountFirst, accountSecond, accountAfterEvict));
+        result.put("订单缓存", buildEvictResult(ordersFirst, ordersSecond, ordersAfterEvict));
+        return result;
+    }
+
+    /**
+     * GET /cache-test/evict/group?id=1&dictType=type1
+     * 测试 group 分组清理
+     */
+    @GetMapping("/evict/group")
+    public Map<String, Object> testGroupEvict(
+            @RequestParam(defaultValue = "1") Long id,
+            @RequestParam(defaultValue = "type1") String dictType) {
+        Map<String, Object> result = new HashMap<>();
+
+        String userFirst = bingCacheDemos.getAdminUser(id);
+        String userSecond = bingCacheDemos.getAdminUser(id);
+        String dictFirst = bingCacheDemos.getAdminDict(dictType);
+        String dictSecond = bingCacheDemos.getAdminDict(dictType);
+
+        bingCacheDemos.clearAdminGroup();
+
+        String userAfterEvict = bingCacheDemos.getAdminUser(id);
+        String dictAfterEvict = bingCacheDemos.getAdminDict(dictType);
+
+        result.put("操作方法", "clearAdminGroup");
+        result.put("管理员用户缓存", buildEvictResult(userFirst, userSecond, userAfterEvict));
+        result.put("管理员字典缓存", buildEvictResult(dictFirst, dictSecond, dictAfterEvict));
+        return result;
+    }
+
+    /**
+     * GET /cache-test/evict/all?userId=1&dictType=type1
+     * 测试全局清理所有缓存
+     */
+    @GetMapping("/evict/all")
+    public Map<String, Object> testClearAll(
+            @RequestParam(defaultValue = "1") Long userId,
+            @RequestParam(defaultValue = "type1") String dictType) {
+        Map<String, Object> result = new HashMap<>();
+
+        String userFirst = bingCacheDemos.getUserById(userId);
+        String userSecond = bingCacheDemos.getUserById(userId);
+        String dictFirst = bingCacheDemos.getDict(dictType);
+        String dictSecond = bingCacheDemos.getDict(dictType);
+
+        bingCacheDemos.clearAll();
+
+        String userAfterEvict = bingCacheDemos.getUserById(userId);
+        String dictAfterEvict = bingCacheDemos.getDict(dictType);
+
+        result.put("操作方法", "clearAll");
+        result.put("用户缓存", buildEvictResult(userFirst, userSecond, userAfterEvict));
+        result.put("字典缓存", buildEvictResult(dictFirst, dictSecond, dictAfterEvict));
+        return result;
+    }
+
     // ========== 性能对比测试 ==========
 
     /**
@@ -331,6 +410,17 @@ public class CacheTestController {
         result.put("列表缓存", String.format("%.3f ms", (System.nanoTime() - start5) / 1_000_000.0));
 
         return result;
+    }
+
+
+    private Map<String, Object> buildEvictResult(String first, String second, String afterEvict) {
+        Map<String, Object> item = new HashMap<>();
+        item.put("第一次", first);
+        item.put("第二次", second);
+        item.put("清理后", afterEvict);
+        item.put("清理前是否缓存", Objects.equals(first, second));
+        item.put("清理后是否刷新", !Objects.equals(second, afterEvict));
+        return item;
     }
 
     // ========== 缓存状态探测 ==========

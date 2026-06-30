@@ -77,4 +77,45 @@ class CacheTestControllerTest {
         org.junit.jupiter.api.Assertions.assertEquals(first, second);
         org.junit.jupiter.api.Assertions.assertNotEquals(second, afterEvict);
     }
+
+
+    @Test
+    void shouldExposeMultiCacheEvictScenario() throws Exception {
+        mockMvc.perform(get("/cache-test/evict/multi-cache")
+                        .param("userId", "201")
+                        .param("name", "Carol"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.操作方法", equalTo("updateUserAccount")))
+                .andExpect(jsonPath("$.账号缓存.清理前是否缓存", equalTo(true)))
+                .andExpect(jsonPath("$.账号缓存.清理后是否刷新", equalTo(true)))
+                .andExpect(jsonPath("$.订单缓存.清理前是否缓存", equalTo(true)))
+                .andExpect(jsonPath("$.订单缓存.清理后是否刷新", equalTo(true)));
+    }
+
+    @Test
+    void shouldExposeGroupEvictScenario() throws Exception {
+        mockMvc.perform(get("/cache-test/evict/group")
+                        .param("id", "301")
+                        .param("dictType", "type1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.操作方法", equalTo("clearAdminGroup")))
+                .andExpect(jsonPath("$.管理员用户缓存.清理前是否缓存", equalTo(true)))
+                .andExpect(jsonPath("$.管理员用户缓存.清理后是否刷新", equalTo(true)))
+                .andExpect(jsonPath("$.管理员字典缓存.清理前是否缓存", equalTo(true)))
+                .andExpect(jsonPath("$.管理员字典缓存.清理后是否刷新", equalTo(true)));
+    }
+
+    @Test
+    void shouldExposeGlobalClearScenario() throws Exception {
+        mockMvc.perform(get("/cache-test/evict/all")
+                        .param("userId", "401")
+                        .param("dictType", "global-type"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.操作方法", equalTo("clearAll")))
+                .andExpect(jsonPath("$.用户缓存.清理前是否缓存", equalTo(true)))
+                .andExpect(jsonPath("$.用户缓存.清理后是否刷新", equalTo(true)))
+                .andExpect(jsonPath("$.字典缓存.清理前是否缓存", equalTo(true)))
+                .andExpect(jsonPath("$.字典缓存.清理后是否刷新", equalTo(true)));
+    }
+
 }
