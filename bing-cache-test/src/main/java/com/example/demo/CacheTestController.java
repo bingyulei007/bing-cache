@@ -19,6 +19,9 @@ public class CacheTestController {
     @Autowired
     private CacheDemoExamples cacheDemoExamples;
 
+    @Autowired
+    private BingCacheDemos bingCacheDemos;
+
     // ========== 基础缓存测试 ==========
 
     /**
@@ -167,6 +170,83 @@ public class CacheTestController {
         result.put("第二次", Map.of("data", data2, "costMs", cost2 / 1_000_000.0));
         result.put("缓存命中", cost2 < cost1 / 2);
 
+        return result;
+    }
+
+
+    // ========== 精确清除测试 ==========
+
+    /**
+     * GET /cache-test/evict/user?id=1&name=Alice
+     * 测试 cacheName + argIndexes 的单 key 清除
+     */
+    @GetMapping("/evict/user")
+    public Map<String, Object> testUserEvict(
+            @RequestParam(defaultValue = "1") Long id,
+            @RequestParam(defaultValue = "Alice") String name) {
+        Map<String, Object> result = new HashMap<>();
+
+        String first = bingCacheDemos.getUserById(id);
+        String second = bingCacheDemos.getUserById(id);
+        bingCacheDemos.updateUser(id, name);
+        String afterEvict = bingCacheDemos.getUserById(id);
+
+        result.put("第一次", first);
+        result.put("第二次", second);
+        result.put("清除方法", "updateUser");
+        result.put("清除后", afterEvict);
+        result.put("清除前是否命中", Objects.equals(first, second));
+        result.put("清除后是否重算", !Objects.equals(second, afterEvict));
+        return result;
+    }
+
+    /**
+     * GET /cache-test/evict/dict?dictType=gender&value=new
+     * 测试 keyPrefix 精确清除
+     */
+    @GetMapping("/evict/dict")
+    public Map<String, Object> testDictEvict(
+            @RequestParam(defaultValue = "gender") String dictType,
+            @RequestParam(defaultValue = "new") String value) {
+        Map<String, Object> result = new HashMap<>();
+
+        String first = bingCacheDemos.getDict(dictType);
+        String second = bingCacheDemos.getDict(dictType);
+        bingCacheDemos.updateDict(dictType, value);
+        String afterEvict = bingCacheDemos.getDict(dictType);
+
+        result.put("第一次", first);
+        result.put("第二次", second);
+        result.put("清除方法", "updateDict");
+        result.put("清除后", afterEvict);
+        result.put("清除前是否命中", Objects.equals(first, second));
+        result.put("清除后是否重算", !Objects.equals(second, afterEvict));
+        return result;
+    }
+
+    /**
+     * GET /cache-test/evict/user-detail?id=1&source=app&name=Alice
+     * 测试 SpEL 精确清除
+     */
+    @GetMapping("/evict/user-detail")
+    public Map<String, Object> testUserDetailEvict(
+            @RequestParam(defaultValue = "1") Long id,
+            @RequestParam(defaultValue = "app") String source,
+            @RequestParam(defaultValue = "Alice") String name) {
+        Map<String, Object> result = new HashMap<>();
+        BingCacheDemos.UserDetailQuery query = new BingCacheDemos.UserDetailQuery(id, source);
+
+        String first = bingCacheDemos.getUserDetail(query);
+        String second = bingCacheDemos.getUserDetail(query);
+        bingCacheDemos.updateUserDetail(query, name);
+        String afterEvict = bingCacheDemos.getUserDetail(query);
+
+        result.put("第一次", first);
+        result.put("第二次", second);
+        result.put("清除方法", "updateUserDetail");
+        result.put("清除后", afterEvict);
+        result.put("清除前是否命中", Objects.equals(first, second));
+        result.put("清除后是否重算", !Objects.equals(second, afterEvict));
         return result;
     }
 
