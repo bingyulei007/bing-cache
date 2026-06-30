@@ -433,15 +433,21 @@ public class CacheTestController {
     public Map<String, Object> status() {
         Map<String, Object> result = new HashMap<>();
         result.put("status", "running");
-        result.put("测试接口", Map.of(
-                "基础缓存", "GET /cache-test/basic?userId=1001",
-                "过期测试", "GET /cache-test/expire?symbol=AAPL",
-                "穿透测试", "GET /cache-test/penetration?id=9999",
-                "多参数", "GET /cache-test/multi?category=x&keyword=y&page=1",
-                "列表缓存", "GET /cache-test/list?category=electronics",
-                "对象参数", "POST /cache-test/object",
-                "性能对比", "GET /cache-test/performance",
-                "批量测试", "GET /cache-test/batch"
+        result.put("测试接口", Map.ofEntries(
+                Map.entry("基础缓存", "GET /cache-test/basic?userId=1001"),
+                Map.entry("过期测试", "GET /cache-test/expire?symbol=AAPL"),
+                Map.entry("穿透测试", "GET /cache-test/penetration?id=9999"),
+                Map.entry("多参数", "GET /cache-test/multi?category=x&keyword=y&page=1"),
+                Map.entry("列表缓存", "GET /cache-test/list?category=electronics"),
+                Map.entry("对象参数", "POST /cache-test/object"),
+                Map.entry("单key清除", "GET /cache-test/evict/user?id=1&name=Alice"),
+                Map.entry("keyPrefix清除", "GET /cache-test/evict/dict?dictType=gender&value=new"),
+                Map.entry("SpEL清除", "GET /cache-test/evict/user-detail?id=1&source=app&name=Alice"),
+                Map.entry("多缓存协同清除", "GET /cache-test/evict/multi-cache?userId=1&name=Alice"),
+                Map.entry("分组清除", "GET /cache-test/evict/group?id=1&dictType=type1"),
+                Map.entry("全局清空", "GET /cache-test/evict/all?userId=1&dictType=type1"),
+                Map.entry("性能对比", "GET /cache-test/performance"),
+                Map.entry("批量测试", "GET /cache-test/batch")
         ));
         return result;
     }

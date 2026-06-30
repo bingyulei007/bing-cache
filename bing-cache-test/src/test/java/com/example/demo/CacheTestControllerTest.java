@@ -118,4 +118,16 @@ class CacheTestControllerTest {
                 .andExpect(jsonPath("$.字典缓存.清除后是否重算", equalTo(true)));
     }
 
+    @Test
+    void shouldListEvictEndpointsInStatus() throws Exception {
+        mockMvc.perform(get("/cache-test/status"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.测试接口.单key清除", equalTo("GET /cache-test/evict/user?id=1&name=Alice")))
+                .andExpect(jsonPath("$.测试接口.keyPrefix清除", equalTo("GET /cache-test/evict/dict?dictType=gender&value=new")))
+                .andExpect(jsonPath("$.测试接口.SpEL清除", equalTo("GET /cache-test/evict/user-detail?id=1&source=app&name=Alice")))
+                .andExpect(jsonPath("$.测试接口.多缓存协同清除", equalTo("GET /cache-test/evict/multi-cache?userId=1&name=Alice")))
+                .andExpect(jsonPath("$.测试接口.分组清除", equalTo("GET /cache-test/evict/group?id=1&dictType=type1")))
+                .andExpect(jsonPath("$.测试接口.全局清空", equalTo("GET /cache-test/evict/all?userId=1&dictType=type1")));
+    }
+
 }
