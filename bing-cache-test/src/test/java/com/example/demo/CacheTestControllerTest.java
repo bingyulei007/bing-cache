@@ -29,7 +29,7 @@ class CacheTestControllerTest {
                         .param("id", "101")
                         .param("name", "Alice"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.清除方法", equalTo("updateUser")))
+                .andExpect(jsonPath("$.清除动作", equalTo("updateUser")))
                 .andExpect(jsonPath("$.清除前是否命中", equalTo(true)))
                 .andExpect(jsonPath("$.清除后是否重算", equalTo(true)))
                 .andReturn();
@@ -47,7 +47,7 @@ class CacheTestControllerTest {
                         .param("dictType", "gender")
                         .param("value", "new"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.清除方法", equalTo("updateDict")))
+                .andExpect(jsonPath("$.清除动作", equalTo("updateDict")))
                 .andExpect(jsonPath("$.清除前是否命中", equalTo(true)))
                 .andExpect(jsonPath("$.清除后是否重算", equalTo(true)))
                 .andReturn();
@@ -66,7 +66,7 @@ class CacheTestControllerTest {
                         .param("source", "app")
                         .param("name", "Bob"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.清除方法", equalTo("updateUserDetail")))
+                .andExpect(jsonPath("$.清除动作", equalTo("updateUserDetail")))
                 .andExpect(jsonPath("$.清除前是否命中", equalTo(true)))
                 .andExpect(jsonPath("$.清除后是否重算", equalTo(true)))
                 .andReturn();

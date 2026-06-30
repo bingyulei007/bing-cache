@@ -193,7 +193,7 @@ public class CacheTestController {
 
         result.put("第一次", first);
         result.put("第二次", second);
-        result.put("清除方法", "updateUser");
+        result.put("清除动作", "updateUser");
         result.put("清除后", afterEvict);
         result.put("清除前是否命中", Objects.equals(first, second));
         result.put("清除后是否重算", !Objects.equals(second, afterEvict));
@@ -217,7 +217,7 @@ public class CacheTestController {
 
         result.put("第一次", first);
         result.put("第二次", second);
-        result.put("清除方法", "updateDict");
+        result.put("清除动作", "updateDict");
         result.put("清除后", afterEvict);
         result.put("清除前是否命中", Objects.equals(first, second));
         result.put("清除后是否重算", !Objects.equals(second, afterEvict));
@@ -243,7 +243,7 @@ public class CacheTestController {
 
         result.put("第一次", first);
         result.put("第二次", second);
-        result.put("清除方法", "updateUserDetail");
+        result.put("清除动作", "updateUserDetail");
         result.put("清除后", afterEvict);
         result.put("清除前是否命中", Objects.equals(first, second));
         result.put("清除后是否重算", !Objects.equals(second, afterEvict));
