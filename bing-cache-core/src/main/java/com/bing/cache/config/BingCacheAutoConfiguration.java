@@ -176,15 +176,23 @@ public class BingCacheAutoConfiguration {
     CompositeCacheManager composite = new CompositeCacheManager(
         l1CacheManager, l2CacheManager, publisher, versionStore);
 
-    // Redis 恢复策略：
-    // - 对账已启用：不立即全量清空 L1，由对账服务在下一个周期（intervalSeconds 内）
-    //   按 cacheName 粒度分批清理，避免瞬间全量驱逐引发回源冲击（stampede）
-    // - 对账未启用：立即全量清空 L1，防止 Redis 恢复后脏数据持续暴露
+    // Redis 恢复策略（两层 backstop 分工）：
+    // - 对账已启用：不立即全量清空 L1，避免瞬间全量驱逐引发回源冲击（stampede）。
+    //   恢复后的 L1 staleness 由两层 backstop 分工清理：
+    //   1) 对账服务（下一周期，intervalSeconds 内）：补偿 clear* 类失效（错过其他实例
+    //      的 clear/clearByPrefix/clearByGroup Pub/Sub，对应版本号变化可被检测）。
+    //   2) l1-max-ttl（effectiveL1MaxTtl 秒自然过期）：兜底 single-key evict 类失效
+    //      （错过其他实例的 evict Pub/Sub，无版本号变化，对账无法检测）以及降级期间
+    //      DB 写入产生的 staleness（无任何失效信号）。
+    // - 对账未启用：立即全量清空 L1，防止 Redis 恢复后脏数据持续暴露。
+    //   此路径下 single-key evict / DB 写入 staleness 同样靠 l1-max-ttl 兜底。
     if (properties.getReconciliation().isEnabled()) {
       l2CacheManager.setRecoveryCallback(() ->
-          LOG.info("Bing Cache: Redis recovered; L1 stale entries will be cleared"
-              + " at next reconciliation cycle (within {}s)",
-              properties.getReconciliation().getInterval()));
+          LOG.info("Bing Cache: Redis recovered. L1 staleness will be resolved by two backstops: "
+              + "reconciliation cycle (within {}s, covers clear* class invalidation missed during degradation) "
+              + "and l1-max-ttl ({}s natural expiry, covers single-key evict and DB-write staleness).",
+              properties.getReconciliation().getInterval(),
+              effectiveL1MaxTtl));
     } else {
       l2CacheManager.setRecoveryCallback(l1CacheManager::clear);
     }
