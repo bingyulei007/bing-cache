@@ -155,6 +155,10 @@ public class CacheReconciliationService implements SmartLifecycle {
       for (String cacheName : activeNames) {
         checkCacheNameVersion(cacheName);
       }
+      // 收敛本地基线到当前活跃集合，清理已废弃 cacheName 的版本记录，
+      // 防止 lastKnownVersions 在两次全局 clear() 之间无限增长。
+      // 复用本轮 SCAN 结果，零额外 Redis 开销；SCAN 降级路径已在上方 return。
+      lastKnownVersions.keySet().retainAll(activeNames);
 
       // 检查各 group 的版本号
       Optional<Set<String>> activeGroupsOpt = versionStore.getActiveGroups();
@@ -165,6 +169,8 @@ public class CacheReconciliationService implements SmartLifecycle {
         for (String group : activeGroups) {
           checkGroupVersion(group);
         }
+        // 同 cacheName，收敛 group 版本基线到当前活跃集合。
+        lastKnownGroupVersions.keySet().retainAll(activeGroups);
       }
       // 只有完整走完 cacheName 与 group 扫描，才认为已建立可信基线。
       initialized = true;

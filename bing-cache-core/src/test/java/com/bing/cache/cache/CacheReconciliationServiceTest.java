@@ -244,6 +244,73 @@ class CacheReconciliationServiceTest {
   }
 
   /**
+   * 测试非全局版本变化路径下，已废弃 cacheName 的本地基线被每周期 retainAll 清理.
+   *
+   * <p>场景：cacheName "user" 在首次对账后从 active 集合消失（但全局版本未变），
+   * 表示该 cacheName 已不活跃。本地 lastKnownVersions 应被收敛到当前 active 集合，
+   * 防止两次全局 clear() 之间已废弃 cacheName 的基线条目无限堆积。</p>
+   */
+  @Test
+  void testStaleCacheNameRemovedByRetainAll() {
+    // 首次对账：user 存在
+    when(versionStore.getAllVersion()).thenReturn(0L);
+    when(versionStore.getActiveCacheNames()).thenReturn(Optional.of(Set.of("user")));
+    when(versionStore.getVersion("user")).thenReturn(1L);
+    service.reconcile();
+    assertTrue(lastKnownVersions().containsKey("user"));
+
+    // 第二次对账：user 已不在 active 集合，全局版本未变
+    when(versionStore.getActiveCacheNames()).thenReturn(Optional.of(Set.of()));
+    service.reconcile();
+
+    // user 应被 retainAll 清理
+    assertFalse(lastKnownVersions().containsKey("user"));
+  }
+
+  /**
+   * 测试非全局版本变化路径下，已废弃 group 的本地基线被每周期 retainAll 清理.
+   */
+  @Test
+  void testStaleGroupRemovedByRetainAll() {
+    // 首次对账：user group 存在
+    when(versionStore.getAllVersion()).thenReturn(0L);
+    when(versionStore.getActiveCacheNames()).thenReturn(Optional.of(Set.of()));
+    when(versionStore.getActiveGroups()).thenReturn(Optional.of(Set.of("user")));
+    when(versionStore.getGroupVersion("user")).thenReturn(1L);
+    service.reconcile();
+    assertTrue(lastKnownGroupVersions().containsKey("user"));
+
+    // 第二次对账：user group 已不在 active 集合
+    when(versionStore.getActiveGroups()).thenReturn(Optional.of(Set.of()));
+    service.reconcile();
+
+    assertFalse(lastKnownGroupVersions().containsKey("user"));
+  }
+
+  /**
+   * 测试 SCAN 降级时 retainAll 不执行，保留已有基线状态.
+   *
+   * <p>SCAN 返回 Optional.empty() 表示本轮扫描不可用（集群模式瞬时状态等），
+   * 此时不应执行 retainAll，避免基于空判断误清本地状态。</p>
+   */
+  @Test
+  void testRetainAllSkippedWhenScanUnavailable() {
+    // 首次对账：user 存在
+    when(versionStore.getAllVersion()).thenReturn(0L);
+    when(versionStore.getActiveCacheNames()).thenReturn(Optional.of(Set.of("user")));
+    when(versionStore.getVersion("user")).thenReturn(1L);
+    service.reconcile();
+    assertTrue(lastKnownVersions().containsKey("user"));
+
+    // 第二次对账：SCAN 不可用
+    when(versionStore.getActiveCacheNames()).thenReturn(Optional.empty());
+    service.reconcile();
+
+    // 应保留状态，不清理
+    assertTrue(lastKnownVersions().containsKey("user"));
+  }
+
+  /**
    * 测试全局版本号从未创建状态（0）递增到 1 时清空所有 L1 缓存.
    */
   @Test
