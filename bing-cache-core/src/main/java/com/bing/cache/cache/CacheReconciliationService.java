@@ -164,14 +164,17 @@ public class CacheReconciliationService implements SmartLifecycle {
       Optional<Set<String>> activeGroupsOpt = versionStore.getActiveGroups();
       if (activeGroupsOpt.isEmpty()) {
         LOG.warn("Active groups unavailable, skipping group reconciliation this cycle");
-      } else {
-        Set<String> activeGroups = activeGroupsOpt.get();
-        for (String group : activeGroups) {
-          checkGroupVersion(group);
-        }
-        // 同 cacheName，收敛 group 版本基线到当前活跃集合。
-        lastKnownGroupVersions.keySet().retainAll(activeGroups);
+        // 与 cacheName 降级分支对称：group SCAN 降级时保持 initialized=false，
+        // 避免下一周期把已存在的 group 版本 key 误判为"首次发现 + initialized=true"
+        // 而触发 clearByGroup 误清 L1。
+        return;
       }
+      Set<String> activeGroups = activeGroupsOpt.get();
+      for (String group : activeGroups) {
+        checkGroupVersion(group);
+      }
+      // 同 cacheName，收敛 group 版本基线到当前活跃集合。
+      lastKnownGroupVersions.keySet().retainAll(activeGroups);
       // 只有完整走完 cacheName 与 group 扫描，才认为已建立可信基线。
       initialized = true;
     } catch (Exception e) {

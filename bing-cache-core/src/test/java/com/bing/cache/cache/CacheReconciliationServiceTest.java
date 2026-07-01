@@ -311,6 +311,35 @@ class CacheReconciliationServiceTest {
   }
 
   /**
+   * 测试首次对账时 group SCAN 降级，initialized 不应被置 true.
+   *
+   * <p>场景：首次对账 cacheName SCAN 成功但 group SCAN 返回 Optional.empty()
+   * （Redis 抖动、集群模式瞬时状态）。按设计意图（字段 Javadoc 与 L175 注释），
+   * initialized 只有在 cacheName 与 group 扫描都成功后才置 true。
+   * 若 group 降级时仍置 true，下一次对账发现已存在的 group 版本 key 会走
+   * "首次发现 + initialized=true" 分支误清 L1。</p>
+   *
+   * <p>本测试断言：首次对账 group 降级后，第二次对账 group 恢复且 Redis 中已有
+   * group 版本号时，<b>不应</b>调用 clearByGroup。</p>
+   */
+  @Test
+  void testGroupScanDegradedOnFirstCycleDoesNotFlipInitialized() {
+    // 首次对账：cacheName 扫描成功（空集），group 扫描降级
+    when(versionStore.getAllVersion()).thenReturn(0L);
+    when(versionStore.getActiveCacheNames()).thenReturn(Optional.of(Set.of()));
+    when(versionStore.getActiveGroups()).thenReturn(Optional.empty());
+    service.reconcile();
+
+    // 第二次对账：group 扫描恢复，Redis 中已有 user group 版本
+    when(versionStore.getActiveGroups()).thenReturn(Optional.of(Set.of("user")));
+    when(versionStore.getGroupVersion("user")).thenReturn(1L);
+    service.reconcile();
+
+    // initialized 应保持 false → "首次发现" 不应触发 clearByGroup
+    verify(l1CacheManager, never()).clearByGroup(anyString());
+  }
+
+  /**
    * 测试全局版本号从未创建状态（0）递增到 1 时清空所有 L1 缓存.
    */
   @Test
