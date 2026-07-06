@@ -214,6 +214,58 @@ class CompositeCacheManagerTest {
     verify(l1CacheManager, never()).put(anyString(), any(), anyLong());
   }
 
+  /**
+   * 测试回填后二次校验检测到 L2 key 已被 evict（positive TTL 场景），立即清除 L1.
+   *
+   * <p>模拟竞态：pre-check TTL=298s → put L1 → post-check TTL=-2（key 被 evict）。
+   * post-check 检测到 key 消失，立即 evict L1，避免旧值驻留。</p>
+   */
+  @Test
+  void testBackfillPostCheckEvictsWhenKeyDisappeared() {
+    when(l1CacheManager.get("user:1")).thenReturn(null);
+    when(l2CacheManager.get("user:1")).thenReturn("l2-value");
+    when(l2CacheManager.getRemainingTtl("user:1"))
+        .thenReturn(298L)   // pre-check
+        .thenReturn(-2L);   // post-check
+
+    Object result = compositeCacheManager.get("user:1");
+    assertEquals("l2-value", result);
+    verify(l1CacheManager).put("user:1", "l2-value", 298L);
+    verify(l1CacheManager).evict("user:1");
+  }
+
+  /**
+   * 测试回填后二次校验检测到 L2 key 已被 evict（no expiry 场景），立即清除 L1.
+   */
+  @Test
+  void testBackfillPostCheckEvictsWhenNoExpiryKeyDisappeared() {
+    when(l1CacheManager.get("user:1")).thenReturn(null);
+    when(l2CacheManager.get("user:1")).thenReturn("l2-value");
+    when(l2CacheManager.getRemainingTtl("user:1"))
+        .thenReturn(-1L)   // pre-check (no expiry)
+        .thenReturn(-2L);  // post-check (key evicted)
+
+    Object result = compositeCacheManager.get("user:1");
+    assertEquals("l2-value", result);
+    verify(l1CacheManager).put("user:1", "l2-value", 0L);
+    verify(l1CacheManager).evict("user:1");
+  }
+
+  /**
+   * 测试回填后二次校验通过（L2 key 仍然存在），不清除 L1.
+   */
+  @Test
+  void testBackfillPostCheckKeepsL1WhenKeyStillExists() {
+    when(l1CacheManager.get("user:1")).thenReturn(null);
+    when(l2CacheManager.get("user:1")).thenReturn("l2-value");
+    when(l2CacheManager.getRemainingTtl("user:1")).thenReturn(298L);
+
+    Object result = compositeCacheManager.get("user:1");
+    assertEquals("l2-value", result);
+    verify(l1CacheManager).put("user:1", "l2-value", 298L);
+    verify(l1CacheManager, never()).evict("user:1");
+  }
+
   private void assertTrue(boolean condition) {
     if (!condition) {
       throw new AssertionError("Expected true but was false");

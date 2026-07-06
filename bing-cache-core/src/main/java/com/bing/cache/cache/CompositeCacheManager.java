@@ -180,6 +180,11 @@ public class CompositeCacheManager implements CacheManager {
    *   <li>remainingTtl == -2 或 0：L2 中 key 已不存在或即将过期，跳过回填</li>
    * </ul>
    *
+   * <p>回填后进行二次校验：再次查询 L2 TTL，若 key 已不存在（TTL == -2），
+   * 说明在首次 TTL 校验与 put 之间 key 被 evict，立即清除 L1 中刚写入的旧值。
+   * 这将单 key evict 的竞态窗口缩小至接近零。单 key evict 不写版本号，
+   * 对账服务无法补偿此场景，二次校验是除 l1-max-ttl 外的唯一补偿手段。</p>
+   *
    * @param key   缓存 key
    * @param value 缓存值
    */
@@ -195,6 +200,16 @@ public class CompositeCacheManager implements CacheManager {
       // 跳过回填，避免在 L1 创建永不过期的脏数据
       LOG.warn("Skip L1 backfill for key '{}': L2 remaining TTL is {} "
           + "(key may have expired or been deleted between L2 hit and TTL check)", key, remainingTtl);
+      return;
+    }
+    // 二次校验：put 之后再次检查 L2 key 是否仍然存在。
+    // 若首次 getRemainingTtl 与 put 之间 key 被 evict，post-check 会检测到 TTL=-2，
+    // 立即清除 L1 中刚写入的旧值，缩小竞态窗口至接近零。
+    long postCheckTtl = l2CacheManager.getRemainingTtl(key);
+    if (postCheckTtl == -2L) {
+      l1CacheManager.evict(key);
+      LOG.warn("L1 backfill reverted for key '{}': L2 key disappeared after backfill "
+          + "(likely evicted by concurrent thread between TTL check and L1 put)", key);
     }
   }
 
