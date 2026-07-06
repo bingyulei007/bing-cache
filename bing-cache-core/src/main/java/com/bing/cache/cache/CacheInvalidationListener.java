@@ -64,9 +64,9 @@ public class CacheInvalidationListener {
         LOG.warn("Invalid cache invalidation message, type is null: {}", messageJson);
         return;
       }
-      // 仅当双方 instanceId 都非 null 且相等时才视为自身消息。
-      // 若消息 instanceId 为 null（异常构造），不应误判为自身消息而跳过。
-      if (instanceId != null && instanceId.equals(message.getInstanceId())) {
+      // instanceId 由构造器保证非 null；若消息 instanceId 为 null（异常构造），
+      // equals 返回 false，不会误判为自身消息而跳过。
+      if (instanceId.equals(message.getInstanceId())) {
         LOG.debug("Ignoring self-published cache invalidation: type={}, key={}",
             message.getType(), message.getKey());
         return;
