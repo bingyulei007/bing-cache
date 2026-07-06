@@ -131,26 +131,56 @@ public class CacheEvictAspect {
 
     if (hasBeforeInvocation) {
       // beforeInvocation: 先清除缓存再执行方法
-      for (BingCacheEvict bingCacheEvict : evictAnnotations) {
-        if (bingCacheEvict.beforeInvocation()) {
-          doSingleEvict(bingCacheEvict, method, args, target);
-        }
-      }
+      evictSafely(evictAnnotations, method, args, target, true);
       Object result = joinPoint.proceed();
       // 方法执行后清除剩余的（非 beforeInvocation 的）
-      for (BingCacheEvict bingCacheEvict : evictAnnotations) {
-        if (!bingCacheEvict.beforeInvocation()) {
-          doSingleEvict(bingCacheEvict, method, args, target);
-        }
-      }
+      evictSafely(evictAnnotations, method, args, target, false);
       return result;
     } else {
       // 默认: 方法执行后再清除缓存
       Object result = joinPoint.proceed();
-      for (BingCacheEvict bingCacheEvict : evictAnnotations) {
-        doSingleEvict(bingCacheEvict, method, args, target);
-      }
+      evictSafely(evictAnnotations, method, args, target, false);
       return result;
+    }
+  }
+
+  /**
+   * 批量执行缓存清除，单个失败不中断其余清除.
+   *
+   * <p>当方法上标注了多个 {@code @BingCacheEvict} 时，单个注解的清除失败（如 SpEL 求值失败、
+   * 保留名校验失败）不应阻止其余注解的清除。首个异常被记录并在所有清除尝试完毕后抛出，
+   * 确保调用方感知配置错误的同时，尽可能清除更多缓存。</p>
+   *
+   * <p>仅捕获 RuntimeException：{@code cacheKeyGenerator.generate()} 抛出的
+   * IllegalStateException/IllegalArgumentException 均为 RuntimeException 子类；
+   * {@code cacheManager.evict()/clear*()} 内部已 try-catch，不会抛出。</p>
+   *
+   * @param evictAnnotations      缓存清除注解数组
+   * @param method                目标方法
+   * @param args                  方法参数
+   * @param target                目标对象
+   * @param requireBeforeInvocation true 只处理 beforeInvocation=true 的注解，
+   *                                false 只处理 beforeInvocation=false 的注解
+   */
+  private void evictSafely(BingCacheEvict[] evictAnnotations, Method method,
+      Object[] args, Object target, boolean requireBeforeInvocation) {
+    RuntimeException firstException = null;
+    for (BingCacheEvict evict : evictAnnotations) {
+      if (evict.beforeInvocation() != requireBeforeInvocation) {
+        continue;
+      }
+      try {
+        doSingleEvict(evict, method, args, target);
+      } catch (RuntimeException e) {
+        LOG.error("Failed to evict cache for method '{}' (cacheName='{}', keyPrefix='{}'): {}",
+            method.getName(), evict.cacheName(), evict.keyPrefix(), e.getMessage(), e);
+        if (firstException == null) {
+          firstException = e;
+        }
+      }
+    }
+    if (firstException != null) {
+      throw firstException;
     }
   }
 

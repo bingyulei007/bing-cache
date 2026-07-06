@@ -368,6 +368,89 @@ class CacheEvictAspectTest {
   }
 
   /**
+   * 测试多个 @BingCacheEvict 中单个失败不阻止其余清除（beforeInvocation=false 路径）.
+   *
+   * <p>方法标注了两个 @BingCacheEvict：第一个使用保留名 "__all__"（抛 IllegalStateException），
+   * 第二个使用合法 cacheName="user"。修复后第二个 evict 仍应执行，user 缓存被清除。
+   * 首个异常在所有 evict 尝试完毕后抛出。</p>
+   */
+  @Test
+  void testMultiEvictFaultIsolation() {
+    try (AnnotationConfigApplicationContext ctx =
+        new AnnotationConfigApplicationContext(TestConfig.class)) {
+      TestService service = ctx.getBean(TestService.class);
+      CaffeineCacheManager cacheManager = ctx.getBean(CaffeineCacheManager.class);
+
+      // 缓存 user 数据
+      service.findByCacheName(1L);
+      String userKey = "user(Sg[N:1])";
+      assertEquals("user_1", cacheManager.get(userKey));
+
+      // 多 evict 方法：第一个 evict 抛异常，第二个应仍执行
+      assertThrows(IllegalStateException.class, service::multiEvictFirstBad);
+
+      // 第二个 evict 应已清除 user 缓存（故障隔离）
+      assertNull(cacheManager.get(userKey),
+          "第二个 evict 应在第一个失败后仍执行，user 缓存应被清除");
+    }
+  }
+
+  /**
+   * 测试多个 @BingCacheEvict 中单个失败不阻止其余清除（beforeInvocation=true 路径）.
+   *
+   * <p>beforeInvocation=true 路径下，第一个 evict 抛异常时，方法不执行，
+   * 但第二个 evict 应仍执行。异常在所有 evict 尝试完毕后抛出。</p>
+   */
+  @Test
+  void testMultiEvictBeforeInvocationFaultIsolation() {
+    try (AnnotationConfigApplicationContext ctx =
+        new AnnotationConfigApplicationContext(TestConfig.class)) {
+      TestService service = ctx.getBean(TestService.class);
+      CaffeineCacheManager cacheManager = ctx.getBean(CaffeineCacheManager.class);
+
+      // 缓存 user 数据
+      service.findByCacheName(1L);
+      String userKey = "user(Sg[N:1])";
+      assertEquals("user_1", cacheManager.get(userKey));
+
+      // 多 evict beforeInvocation：第一个 evict 抛异常，第二个应仍执行
+      assertThrows(IllegalStateException.class,
+          service::multiEvictBeforeInvocationFirstBad);
+
+      // 第二个 evict 应已清除 user 缓存
+      assertNull(cacheManager.get(userKey),
+          "第二个 evict 应在第一个失败后仍执行，user 缓存应被清除");
+    }
+  }
+
+  /**
+   * 测试多个 @BingCacheEvict 全部合法时正常执行.
+   *
+   * <p>验证 try-catch 不影响正常路径：两个合法 evict 都应执行，无异常抛出。</p>
+   */
+  @Test
+  void testMultiEvictAllValid() {
+    try (AnnotationConfigApplicationContext ctx =
+        new AnnotationConfigApplicationContext(TestConfig.class)) {
+      TestService service = ctx.getBean(TestService.class);
+      CaffeineCacheManager cacheManager = ctx.getBean(CaffeineCacheManager.class);
+
+      // 缓存 user 和 dict 数据
+      service.findByCacheName(1L);
+      service.findDict("config");
+      String userKey = "user(Sg[N:1])";
+      String dictKey = "dict(Sg[S:config])";
+      assertEquals("user_1", cacheManager.get(userKey));
+      assertEquals("dict_config", cacheManager.get(dictKey));
+
+      // 多 evict 全部合法，应全部执行，无异常
+      service.multiEvictAllValid();
+      assertNull(cacheManager.get(userKey));
+      assertNull(cacheManager.get(dictKey));
+    }
+  }
+
+  /**
    * 测试配置类.
    */
   @Configuration
@@ -605,6 +688,37 @@ class CacheEvictAspectTest {
      */
     @BingCacheEvict(cacheName = "spelUser", argSpel = "#user.id")
     public void updateBySpelUser(SpelTestUser user) {
+      callCount++;
+    }
+
+    /**
+     * 多 @BingCacheEvict 故障隔离测试：第一个使用保留名抛异常，第二个合法.
+     *
+     * <p>验证 beforeInvocation=false 路径下，第一个 evict 失败不阻止第二个执行。</p>
+     */
+    @BingCacheEvict(cacheName = "__all__", allEntries = true)
+    @BingCacheEvict(cacheName = "user", allEntries = true)
+    public void multiEvictFirstBad() {
+      callCount++;
+    }
+
+    /**
+     * 多 @BingCacheEvict 故障隔离测试：beforeInvocation=true 路径.
+     *
+     * <p>验证 beforeInvocation=true 路径下，第一个 evict 失败不阻止第二个执行。</p>
+     */
+    @BingCacheEvict(cacheName = "__all__", allEntries = true, beforeInvocation = true)
+    @BingCacheEvict(cacheName = "user", allEntries = true, beforeInvocation = true)
+    public void multiEvictBeforeInvocationFirstBad() {
+      callCount++;
+    }
+
+    /**
+     * 多 @BingCacheEvict 全部合法：验证正常路径不受 try-catch 影响.
+     */
+    @BingCacheEvict(cacheName = "user", allEntries = true)
+    @BingCacheEvict(cacheName = "dict", allEntries = true)
+    public void multiEvictAllValid() {
       callCount++;
     }
 
