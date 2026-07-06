@@ -17,7 +17,9 @@
 package com.bing.cache.util;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
 import java.lang.reflect.Array;
 import java.lang.reflect.Method;
@@ -61,7 +63,9 @@ import org.springframework.util.StringUtils;
  */
 public class CacheKeyGenerator {
 
-  private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+  private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper()
+      .registerModule(new JavaTimeModule())
+      .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
   /** 缓存 key 最大长度. */
   static final int MAX_KEY_LENGTH = 256;
@@ -581,14 +585,16 @@ public class CacheKeyGenerator {
     if (arg.getClass().isArray()) {
       return serializeArray(arg);
     }
-    // 自定义对象，使用 Jackson 序列化确保确定性
+    // 自定义对象，使用 Jackson 序列化确保确定性。
+    // OBJECT_MAPPER 已注册 JavaTimeModule 并关闭 WRITE_DATES_AS_TIMESTAMPS，
+    // LocalDateTime/Instant/ZonedDateTime 等 JSR-310 类型以 ISO-8601 字符串序列化。
     try {
       return OBJECT_MAPPER.writeValueAsString(arg);
     } catch (JsonProcessingException e) {
       // Jackson 序列化失败时不可静默降级为 hashCode：
       // 未重写 hashCode 的对象走 identity hashCode，每次 JVM 启动都不同，
       // 会破坏"重启后 key 一致"的承诺，导致缓存全部失效且难以排查。
-      // 直接抛异常让调用方感知并修复参数类型（如注册 JavaTime 模块、避免循环引用）。
+      // 直接抛异常让调用方感知并修复参数类型（如避免循环引用）。
       throw new IllegalStateException(
           "Failed to serialize argument of type " + arg.getClass().getName()
               + " for cache key generation. Jackson error: " + e.getOriginalMessage(), e);

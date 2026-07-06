@@ -22,6 +22,11 @@ import org.springframework.core.DefaultParameterNameDiscoverer;
 import org.springframework.expression.spel.standard.SpelExpressionParser;
 
 import java.lang.reflect.Method;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -314,6 +319,117 @@ class CacheKeyGeneratorTest {
         () -> generator.generate(method, args, null, "", "", "", new int[]{}, ""));
     assertTrue(ex.getMessage().contains("Failed to serialize argument of type"));
     assertTrue(ex.getCause() instanceof com.fasterxml.jackson.core.JsonProcessingException);
+  }
+
+  // ===== Java 8 时间类型序列化测试 =====
+
+  /**
+   * 测试 LocalDateTime 参数能被正确序列化为 cache key.
+   *
+   * <p>OBJECT_MAPPER 注册了 JavaTimeModule 并关闭 WRITE_DATES_AS_TIMESTAMPS，
+   * LocalDateTime 以 ISO-8601 字符串序列化（如 "2026-07-06T12:00:00"），
+   * 不再抛 InvalidDefinitionException。</p>
+   */
+  @Test
+  void testLocalDateTimeArgSerializedWithJavaTimeModule() throws NoSuchMethodException {
+    Method method = TestService.class.getMethod("findByTime", LocalDateTime.class);
+    Object[] args = {LocalDateTime.of(2026, 7, 6, 12, 0, 0)};
+
+    String key = generator.generate(method, args, null, "", "event", "", new int[]{}, "");
+
+    assertTrue(key.contains("2026-07-06T12:00:00"),
+        "LocalDateTime 应序列化为 ISO-8601 字符串");
+  }
+
+  /**
+   * 测试 Instant 参数能被正确序列化为 cache key.
+   */
+  @Test
+  void testInstantArgSerializedWithJavaTimeModule() throws NoSuchMethodException {
+    Method method = TestService.class.getMethod("findByInstant", Instant.class);
+    Object[] args = {Instant.parse("2026-07-06T12:00:00Z")};
+
+    String key = generator.generate(method, args, null, "", "event", "", new int[]{}, "");
+
+    assertTrue(key.contains("2026-07-06T12:00:00"),
+        "Instant 应序列化为 ISO-8601 字符串");
+  }
+
+  /**
+   * 测试 LocalDate 参数能被正确序列化为 cache key.
+   */
+  @Test
+  void testLocalDateArgSerializedWithJavaTimeModule() throws NoSuchMethodException {
+    Method method = TestService.class.getMethod("findByLocalDate", LocalDate.class);
+    Object[] args = {LocalDate.of(2026, 7, 6)};
+
+    String key = generator.generate(method, args, null, "", "event", "", new int[]{}, "");
+
+    assertTrue(key.contains("2026-07-06"),
+        "LocalDate 应序列化为 ISO-8601 日期字符串");
+  }
+
+  /**
+   * 测试 ZonedDateTime 参数能被正确序列化为 cache key.
+   */
+  @Test
+  void testZonedDateTimeArgSerializedWithJavaTimeModule() throws NoSuchMethodException {
+    Method method = TestService.class.getMethod("findByZoned", ZonedDateTime.class);
+    Object[] args = {ZonedDateTime.of(2026, 7, 6, 12, 0, 0, 0, ZoneOffset.UTC)};
+
+    String key = generator.generate(method, args, null, "", "event", "", new int[]{}, "");
+
+    assertTrue(key.contains("2026-07-06T12:00:00"),
+        "ZonedDateTime 应序列化为 ISO-8601 字符串");
+  }
+
+  /**
+   * 测试相同 LocalDateTime 生成相同 key（重启一致性）.
+   */
+  @Test
+  void testSameLocalDateTimeProducesSameKey() throws NoSuchMethodException {
+    Method method = TestService.class.getMethod("findByTime", LocalDateTime.class);
+    LocalDateTime time1 = LocalDateTime.of(2026, 7, 6, 12, 0, 0);
+    LocalDateTime time2 = LocalDateTime.of(2026, 7, 6, 12, 0, 0);
+
+    String key1 = generator.generate(method, new Object[]{time1}, null,
+        "", "event", "", new int[]{}, "");
+    String key2 = generator.generate(method, new Object[]{time2}, null,
+        "", "event", "", new int[]{}, "");
+
+    assertEquals(key1, key2);
+  }
+
+  /**
+   * 测试不同 LocalDateTime 生成不同 key.
+   */
+  @Test
+  void testDifferentLocalDateTimeProducesDifferentKey() throws NoSuchMethodException {
+    Method method = TestService.class.getMethod("findByTime", LocalDateTime.class);
+    LocalDateTime time1 = LocalDateTime.of(2026, 7, 6, 12, 0, 0);
+    LocalDateTime time2 = LocalDateTime.of(2026, 7, 7, 12, 0, 0);
+
+    String key1 = generator.generate(method, new Object[]{time1}, null,
+        "", "event", "", new int[]{}, "");
+    String key2 = generator.generate(method, new Object[]{time2}, null,
+        "", "event", "", new int[]{}, "");
+
+    assertNotEquals(key1, key2);
+  }
+
+  /**
+   * 测试 SpEL 表达式选取 LocalDateTime 属性并序列化.
+   */
+  @Test
+  void testSpelKeyWithLocalDateTime() throws NoSuchMethodException {
+    Method method = TestService.class.getMethod("findByTime", LocalDateTime.class);
+    Object[] args = {LocalDateTime.of(2026, 7, 6, 12, 0, 0)};
+
+    String key = generator.generate(method, args, null, "", "event", "",
+        new int[]{}, "#time");
+
+    assertTrue(key.contains("2026-07-06T12:00:00"));
+    assertTrue(key.startsWith("event(Sg["));
   }
 
   // ===== SpEL key 表达式测试 =====
@@ -857,6 +973,22 @@ class CacheKeyGeneratorTest {
     }
 
     public String findByUser(TestUser user) {
+      return "result";
+    }
+
+    public String findByTime(LocalDateTime time) {
+      return "result";
+    }
+
+    public String findByInstant(Instant instant) {
+      return "result";
+    }
+
+    public String findByLocalDate(LocalDate date) {
+      return "result";
+    }
+
+    public String findByZoned(ZonedDateTime zoned) {
       return "result";
     }
   }

@@ -63,6 +63,12 @@
       <artifactId>jackson-databind</artifactId>
     </dependency>
 
+    <!-- Jackson JSR-310 模块：支持 LocalDateTime/Instant 等 Java 8 时间类型作为缓存 key 参数 -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.datatype</groupId>
+      <artifactId>jackson-datatype-jsr310</artifactId>
+    </dependency>
+
     <!-- Configuration Properties 元数据生成 -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
