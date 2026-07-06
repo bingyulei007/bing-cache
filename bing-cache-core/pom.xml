@@ -57,16 +57,18 @@
       <scope>provided</scope>
     </dependency>
 
-    <!-- Jackson (key 生成 + Redis 序列化) -->
+    <!-- Jackson (provided — 使用者项目提供，如 spring-boot-starter-web/spring-boot-starter-json) -->
     <dependency>
       <groupId>com.fasterxml.jackson.core</groupId>
       <artifactId>jackson-databind</artifactId>
+      <scope>provided</scope>
     </dependency>
 
     <!-- Jackson JSR-310 模块：支持 LocalDateTime/Instant 等 Java 8 时间类型作为缓存 key 参数 -->
     <dependency>
       <groupId>com.fasterxml.jackson.datatype</groupId>
       <artifactId>jackson-datatype-jsr310</artifactId>
+      <scope>provided</scope>
     </dependency>
 
     <!-- Configuration Properties 元数据生成 -->
