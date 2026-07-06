@@ -98,6 +98,8 @@ public class DictService {
 
 `keyPrefix` 含冒号存在同样的碰撞风险，使用 group 时同样应避免。
 
+同理，`group` 本身也不应含冒号。若存在 `group="foo"` 与 `group="foo:bar"` 两个分组，`clearByGroup("foo")` 按 `foo:` 前缀匹配时会误清 `foo:bar:` 下的条目。建议 `group` 使用单词或驼峰命名（如 `user`、`orderDetail`）。
+
 若需要"分组"语义，使用 `group` 属性而非在 `cacheName` 中拼接冒号。
 
 #### argSpel SpEL 表达式
