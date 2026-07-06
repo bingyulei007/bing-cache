@@ -39,12 +39,12 @@ public class CacheInvalidationListener {
    * 构造方法.
    *
    * @param l1CacheManager 本地 L1 缓存管理器
-   * @param instanceId     当前实例的唯一标识，用于过滤自己发出的消息
+   * @param instanceId     当前实例的唯一标识，用于过滤自己发出的消息（不可为 null）
    */
   public CacheInvalidationListener(CacheManager l1CacheManager,
       String instanceId) {
     this.l1CacheManager = Objects.requireNonNull(l1CacheManager, "l1CacheManager cannot be null");
-    this.instanceId = instanceId; // nullable, 用于过滤自己发出的消息
+    this.instanceId = Objects.requireNonNull(instanceId, "instanceId cannot be null");
   }
 
   /**

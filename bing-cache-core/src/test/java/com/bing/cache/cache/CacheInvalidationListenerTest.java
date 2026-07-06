@@ -17,6 +17,7 @@
 package com.bing.cache.cache;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -86,6 +87,12 @@ class CacheInvalidationListenerTest {
   @Test
   void testListenerCreation() {
     assertNotNull(new CacheInvalidationListener(l1CacheManager, INSTANCE_ID));
+  }
+
+  @Test
+  void testNullInstanceIdRejected() {
+    assertThrows(NullPointerException.class,
+        () -> new CacheInvalidationListener(l1CacheManager, null));
   }
 
   @Test
