@@ -15,6 +15,22 @@
 - **确定性 Key**：基于 Jackson 序列化生成 key，不依赖 `toString()`，重启后保持一致
 - **自动装配**：Spring Boot Starter 一键引入，根据 classpath 和配置自动选择缓存模式
 
+## ⚠️ 一致性须知（使用前必读）
+
+Bing Cache 采用 **最终一致性** 模型，不同失效操作的一致性强度不同，使用前务必了解：
+
+| 失效操作 | 跨实例一致性保障 | Pub/Sub 丢失时的兜底 |
+|---|---|---|
+| `clear()` / `clearByPrefix()` / `clearByGroup()`（`allEntries=true`） | Pub/Sub + 版本对账（双重） | 版本对账在下一对账周期补偿 ✅ |
+| **单 key `evict()`（`allEntries=false`）** | **仅 Pub/Sub（单层）** | **无对账补偿，仅靠 `l1-max-ttl` 自然过期** ⚠️ |
+
+**关键限制**：单 key `evict` 不递增版本号（避免产生与业务 key 等量的版本键导致 Redis 膨胀），因此其跨实例失效**完全依赖 Pub/Sub 实时送达**。若发生网络分区导致 Pub/Sub 持续丢失，被 evict 的脏数据会在其他实例 L1 中驻留最长 `l1-max-ttl`（L1+L2 模式默认 300 秒）。
+
+**实践建议**：
+- 对一致性要求高的单 key 更新场景（如"更新用户手机号"），将 `l1-max-ttl` 调到可接受的脏数据窗口（如 60-120 秒）。
+- 若 300 秒脏数据窗口不可接受，考虑用 `allEntries=true` 批量清除（走版本对账，一致性更强但清除范围更大）。
+- 单 key evict 的详细机制见 [版本对账机制 - 对账范围限制](#版本对账机制)。
+
 ## 快速开始
 
 ### 1. 引入依赖
@@ -147,6 +163,8 @@ SpEL 表达式求值结果通过 Jackson 序列化为字符串（非基本类型
 >
 > 注意：上述限制针对的是**正常业务场景**（少量不存在的 id 被反复查询）。若面临**恶意穿透攻击**（海量不同 id 各查一次），L1 的 `max-size` 容量限制会导致 NullValue 来不及生效，此时必须用布隆过滤器在入口拦截，无论单实例还是多实例、是否写 L2 都无法仅靠缓存解决。
 
+> **null 值的 TTL 兜底**：null 值表示"数据**当前**不存在"，是一个会过时的临时判定（DB 随时可写使其变为"存在"）。因此当 `cacheNullValue = true` 且 `expireTime <= 0`（永不过期）时，组件不会让 null 占位符永久驻留 L1，而是自动套用 **300 秒**的兜底 TTL，并输出一次 WARN 日志提醒。这避免了"DB 后续插入数据后，本实例因永久缓存的 null 而持续脏读"的问题。此兜底在纯 L1 和 L1+L2 两种模式下均生效；建议为 `cacheNullValue = true` 的方法显式设置一个合理的正数 `expireTime`（如 60 秒），而非依赖兜底值。
+
 #### 使用示例
 
 ```java
@@ -223,7 +241,7 @@ public Order getOrder(Long userId, String type) { ... }
 | `argIndexes` | int[] | `{}` | 参与 key 生成的参数索引，需与 `@BingCache` 的 `argIndexes` 对应；`argSpel` 非空时忽略 |
 | `argSpel` | String | `""` | SpEL 表达式，需与 `@BingCache` 的 `argSpel` 一致才能匹配；非空时优先于 `argIndexes`；`allEntries=true` 时不生效 |
 | `allEntries` | boolean | `false` | `true` 时清除所有缓存：仅 `group` 时清整个 group；有 `cacheName`/`keyPrefix` 时清该前缀；都没有时清空全部 |
-| `beforeInvocation` | boolean | `false` | `true` 时在方法执行前清除缓存；默认方法成功后才清除 |
+| `beforeInvocation` | boolean | `false` | `true` 时在方法执行前清除缓存；默认方法成功后才清除。**⚠️ 方法失败时缓存已被清，数据未变更，后续请求回源，可能引发击穿/雪崩，事务方法上慎用** |
 
 > **cacheName 与 keyPrefix 选择原则同 `@BingCache`**：推荐用 `cacheName` 配对，语义更明确。`cacheName` 不为空时 `keyPrefix` 被忽略。
 
@@ -255,6 +273,8 @@ public void updateUser(Long id, UserVO vo) { ... }
 public void deleteUser(UserVO vo) { ... }
 
 // 方法执行前清除缓存（即使方法抛异常，缓存也会被清除）
+// ⚠️ 注意：若方法失败（异常/事务回滚），数据未变更但缓存已空，后续请求会回源，
+//    可能引发击穿/雪崩。仅用于"即使失败也确需清缓存"的场景，事务方法上慎用。
 @BingCacheEvict(cacheName = "userDetail", argIndexes = {0}, beforeInvocation = true)
 public void forceUpdateUser(Long id, UserVO vo) { ... }
 

@@ -121,6 +121,10 @@ public class CaffeineCacheManager implements CacheManager {
     // 缓存 key 格式为 prefix(args)，追加 "(" 精确匹配 cacheName，
     // 避免一个 cacheName 是另一个前缀时误删（如 clearByPrefix("user") 误删 "userDetail" 的 key）。
     String matchPrefix = prefix + "(";
+    // ⚠️ 并发残留窗口：cache.asMap() 返回 ConcurrentMap，其 keySet().removeIf 基于
+    // weakly consistent 迭代器，本轮 remove 期间并发 put 写入的新 key 可能不被迭代器看到。
+    // 这些残留 key 既不会被本轮 removeIf 清除，也不会被版本对账清除（本实例已将版本号
+    // 记录为最新），只能靠 l1-max-ttl 自然过期兜底。这是 Caffeine 无锁并发设计的固有取舍。
     cache.asMap().keySet().removeIf(key -> key.startsWith(matchPrefix));
   }
 
@@ -129,6 +133,8 @@ public class CaffeineCacheManager implements CacheManager {
     // 匹配 "group:" 开头的 L1 key
     // 缓存 key 格式为 group:prefix(args)，匹配 group: 命名空间前缀
     String matchPrefix = group + ":";
+    // ⚠️ 并发残留窗口：同 clearByPrefix，weakly consistent 迭代器可能漏掉并发 put 的新 key，
+    // 残留 key 只能靠 l1-max-ttl 兜底。
     cache.asMap().keySet().removeIf(key -> key.startsWith(matchPrefix));
   }
 

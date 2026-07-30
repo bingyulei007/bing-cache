@@ -295,6 +295,13 @@ public class RedisCacheManager implements CacheManager {
    * 用于 {@link #clear()} 全清场景排除版本号 key（{@code bing-cache:__version__:}），
    * 避免破坏 {@link CacheReconciliationService} 的对账状态。</p>
    *
+   * <p><b>⚠️ 非原子性与脏读窗口</b>：SCAN 与 DEL 分批执行，整个过程非原子。扫描期间
+   * 其他实例的并发 {@code put} 写入的 key 可能不被本轮 SCAN 看到（SCAN 游标已越过），
+   * 导致该 key 残留在 L2。此窗口由两层兜底保证最终一致：
+   * 1) Pub/Sub 广播 {@code CLEAR_PREFIX/CLEAR_GROUP} 通知其他实例清 L1；
+   * 2) 版本对账（{@code clearByPrefix} 递增 cacheName 版本号、{@code clearByGroup}
+   * 递增 group 版本号）补偿 Pub/Sub 丢失。对一致性要求极高的场景，建议业务层加版本号校验。</p>
+   *
    * @param pattern        Redis SCAN MATCH 模式（粗筛）
    * @param literalPrefix  字面前缀（null 表示不过滤）
    * @param excludePrefix  排除前缀（null 表示不排除）
@@ -462,6 +469,15 @@ public class RedisCacheManager implements CacheManager {
    * <p>恢复判断通过 synchronized 保证原子性：多个线程并发成功时，
    * 仅一个线程能将 {@code degradationWarned} 从 true 翻转为 false 并触发回调，
    * 避免回调被重复触发。回调在锁外执行，避免持锁过久。</p>
+   *
+   * <p><b>线程安全边界</b>：{@code consecutiveFailures}、{@code consecutiveSuccesses}
+   * 与 {@code degradationWarned} 三者各自独立，未在同一把锁下统一更新，存在短暂的
+   * 计数不一致窗口（如并发 {@code recordSuccess}/{@code recordFailure} 交错时计数器的
+   * 读取值与 {@code degradationWarned} 的快照可能不同步）。这不影响降级/恢复判断的
+   * 正确性：降级仅依赖 {@code consecutiveFailures} 单调递增至阈值，恢复仅依赖
+   * {@code consecutiveSuccesses} 单调递增至阈值，且两者的关键翻转点（{@code degradationWarned}
+   * 的 true↔false 切换）均在 synchronized 块内完成 double-check。最坏情况仅是阈值边界
+   * 多/少一次成功或失败计数，不导致状态机错误。</p>
    */
   private void recordSuccess() {
     consecutiveFailures.set(0);

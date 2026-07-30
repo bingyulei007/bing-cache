@@ -276,8 +276,13 @@ public class BingCacheProperties {
      *
      * <p>必须为正整数。设为 0 或负数会导致 {@code scheduleAtFixedRate} 抛出
      * {@link IllegalArgumentException}，启动失败。</p>
+     *
+     * <p>上限 86400 秒（24 小时）：对账间隔过长会导致 Pub/Sub 丢失的 clear* 类失效
+     * 在 L1 中长时间不被补偿，脏数据窗口随间隔增大而扩大。如需更长的间隔，
+     * 请重新评估是否真的需要版本对账——此时 l1-max-ttl 兜底可能已足够。</p>
      */
     @Min(1)
+    @Max(86400)
     private long interval = 30L;
 
     public boolean isEnabled() {

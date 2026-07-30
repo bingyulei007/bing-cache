@@ -17,10 +17,12 @@
 package com.bing.cache.cache;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.Iterator;
@@ -29,6 +31,7 @@ import java.util.Set;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.data.redis.connection.RedisConnection;
 import org.springframework.data.redis.connection.RedisKeyCommands;
 import org.springframework.data.redis.core.Cursor;
@@ -170,5 +173,73 @@ class CacheVersionStoreTest {
 
     Optional<Set<String>> namesOpt = versionStore.getActiveCacheNames();
     assertTrue(namesOpt.isEmpty());
+  }
+
+  @Test
+  void testConstructorRejectsNonPositiveScanCount() {
+    assertThrows(IllegalArgumentException.class,
+        () -> new CacheVersionStore(stringRedisTemplate, "bing-cache:__version__:", 0L));
+    assertThrows(IllegalArgumentException.class,
+        () -> new CacheVersionStore(stringRedisTemplate, "bing-cache:__version__:", -1L));
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void testScanCountPassedToScanOptions() {
+    // 验证自定义 scanCount 被透传到 SCAN 的 ScanOptions.count
+    long customScanCount = 500L;
+    CacheVersionStore customStore = new CacheVersionStore(
+        stringRedisTemplate, "bing-cache:__version__:", customScanCount);
+
+    Iterator<byte[]> keyIterator = java.util.Arrays.asList(
+        "bing-cache:__version__:user".getBytes()
+    ).iterator();
+    Cursor<byte[]> cursor = mock(Cursor.class);
+    when(cursor.hasNext()).thenAnswer(inv -> keyIterator.hasNext());
+    when(cursor.next()).thenAnswer(inv -> keyIterator.next());
+
+    RedisConnection connection = mock(RedisConnection.class);
+    RedisKeyCommands keyCommands = mock(RedisKeyCommands.class);
+    when(connection.keyCommands()).thenReturn(keyCommands);
+    when(keyCommands.scan(any(ScanOptions.class))).thenReturn(cursor);
+
+    when(stringRedisTemplate.execute(any(RedisCallback.class)))
+        .thenAnswer(inv -> {
+          RedisCallback<?> callback = inv.getArgument(0);
+          return callback.doInRedis(connection);
+        });
+
+    customStore.getActiveCacheNames();
+
+    ArgumentCaptor<ScanOptions> captor = ArgumentCaptor.forClass(ScanOptions.class);
+    verify(keyCommands).scan(captor.capture());
+    assertEquals(customScanCount, captor.getValue().getCount());
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void testDefaultConstructorUsesDefaultScanCount() {
+    // 验证双参构造方法使用默认 scanCount（100）
+    Iterator<byte[]> keyIterator = java.util.Collections.<byte[]>emptyList().iterator();
+    Cursor<byte[]> cursor = mock(Cursor.class);
+    when(cursor.hasNext()).thenAnswer(inv -> keyIterator.hasNext());
+    when(cursor.next()).thenAnswer(inv -> keyIterator.next());
+
+    RedisConnection connection = mock(RedisConnection.class);
+    RedisKeyCommands keyCommands = mock(RedisKeyCommands.class);
+    when(connection.keyCommands()).thenReturn(keyCommands);
+    when(keyCommands.scan(any(ScanOptions.class))).thenReturn(cursor);
+
+    when(stringRedisTemplate.execute(any(RedisCallback.class)))
+        .thenAnswer(inv -> {
+          RedisCallback<?> callback = inv.getArgument(0);
+          return callback.doInRedis(connection);
+        });
+
+    versionStore.getActiveCacheNames();
+
+    ArgumentCaptor<ScanOptions> captor = ArgumentCaptor.forClass(ScanOptions.class);
+    verify(keyCommands).scan(captor.capture());
+    assertEquals(CacheVersionStore.DEFAULT_SCAN_COUNT, captor.getValue().getCount());
   }
 }

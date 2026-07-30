@@ -17,6 +17,7 @@
 package com.bing.cache.aspect;
 
 import com.bing.cache.annotation.BingCache;
+import com.bing.cache.cache.CacheManager;
 import com.bing.cache.cache.CaffeineCacheManager;
 import com.bing.cache.util.CacheKeyGenerator;
 
@@ -120,6 +121,49 @@ class CacheAspectTest {
       assertNull(service.findByNameNull("missing"));
 
       assertEquals(1, target.getCallCount());
+    }
+  }
+
+  /**
+   * 测试 cacheNullValue=true 且 expireTime=0 时，null 占位符使用兜底 TTL 而非永久驻留.
+   *
+   * <p>验证修复：纯 L1 模式下 {@code cacheNullValue=true} + {@code expireTime=0} 不再导致
+   * null 占位符永久驻留 L1，而是套用 {@code NULL_VALUE_FALLBACK_TTL_SECONDS}（300s）。</p>
+   */
+  @Test
+  void testNullValueFallbackTtlWhenExpireZero() {
+    try (AnnotationConfigApplicationContext ctx =
+        new AnnotationConfigApplicationContext(RecordingTestConfig.class)) {
+      TestService service = ctx.getBean(TestService.class);
+      RecordingCacheManager recordingManager = ctx.getBean(RecordingCacheManager.class);
+
+      assertNull(service.findNeverExpireNull("missing"));
+
+      // 应当写入一次，且 expireSeconds 为兜底值而非 0
+      assertEquals(1, recordingManager.putCount);
+      assertEquals(CacheAspect.NULL_VALUE_FALLBACK_TTL_SECONDS,
+          recordingManager.lastPutExpireSeconds,
+          "expireTime=0 的 null 值应使用兜底 TTL，而非永久驻留");
+    }
+  }
+
+  /**
+   * 测试 cacheNullValue=true 且 expireTime>0 时，尊重用户配置的 expireTime.
+   *
+   * <p>验证兜底逻辑只在 {@code expireTime<=0} 时触发，正数 expireTime 不受影响。</p>
+   */
+  @Test
+  void testNullValueRespectsPositiveExpireTime() {
+    try (AnnotationConfigApplicationContext ctx =
+        new AnnotationConfigApplicationContext(RecordingTestConfig.class)) {
+      TestService service = ctx.getBean(TestService.class);
+      RecordingCacheManager recordingManager = ctx.getBean(RecordingCacheManager.class);
+
+      assertNull(service.findByNameNull("missing"));
+
+      assertEquals(1, recordingManager.putCount);
+      assertEquals(30L, recordingManager.lastPutExpireSeconds,
+          "expireTime>0 时应尊重用户配置，不触发兜底");
     }
   }
 
@@ -263,6 +307,39 @@ class CacheAspectTest {
   }
 
   /**
+   * 用于 null 值兜底 TTL 测试的配置类.
+   *
+   * <p>使用 {@link RecordingCacheManager}（实现 {@link CacheManager}）作为 CacheManager，
+   * 以便测试获取并验证 put 时的 expireSeconds 参数。</p>
+   */
+  @Configuration
+  @EnableAspectJAutoProxy
+  static class RecordingTestConfig {
+
+    @Bean
+    public RecordingCacheManager cacheManager() {
+      return new RecordingCacheManager();
+    }
+
+    @Bean
+    public CacheKeyGenerator cacheKeyGenerator() {
+      return new CacheKeyGenerator(
+          new SpelExpressionParser(), new DefaultParameterNameDiscoverer());
+    }
+
+    @Bean
+    public CacheAspect cacheAspect(RecordingCacheManager cacheManager,
+        CacheKeyGenerator cacheKeyGenerator) {
+      return new CacheAspect(cacheManager, cacheKeyGenerator);
+    }
+
+    @Bean
+    public TestService testServiceTarget() {
+      return new TestService();
+    }
+  }
+
+  /**
    * 测试用的 Service 类.
    */
   static class TestService {
@@ -304,6 +381,21 @@ class CacheAspectTest {
      */
     @BingCache(keyPrefix = "user:name:null", expireTime = 30, cacheNullValue = true)
     public String findByNameNull(String name) {
+      callCount++;
+      return null;
+    }
+
+    /**
+     * 根据名称查询，cacheNullValue=true 且 expireTime=0（永不过期）.
+     *
+     * <p>用于验证 null 值兜底 TTL：expireTime=0 时 null 占位符应套用
+     * {@code NULL_VALUE_FALLBACK_TTL_SECONDS} 而非永久驻留。</p>
+     *
+     * @param name 名称
+     * @return 结果
+     */
+    @BingCache(keyPrefix = "user:name:null:noexpire", cacheNullValue = true)
+    public String findNeverExpireNull(String name) {
       callCount++;
       return null;
     }
@@ -370,6 +462,51 @@ class CacheAspectTest {
 
     public String getName() {
       return name;
+    }
+  }
+
+  /**
+   * 记录 put 调用参数的 CacheManager 桩，用于验证 null 值兜底 TTL.
+   *
+   * <p>get 永远返回 null（模拟缓存未命中），put 时记录传入的 expireSeconds。
+   * 其他操作为空实现。</p>
+   */
+  static class RecordingCacheManager implements CacheManager {
+
+    volatile int putCount = 0;
+    volatile long lastPutExpireSeconds = -1L;
+    volatile Object lastPutValue = null;
+
+    @Override
+    public Object get(String key) {
+      return null;
+    }
+
+    @Override
+    public void put(String key, Object value, long expireSeconds) {
+      putCount++;
+      lastPutExpireSeconds = expireSeconds;
+      lastPutValue = value;
+    }
+
+    @Override
+    public void evict(String key) {
+      // no-op
+    }
+
+    @Override
+    public void clear() {
+      // no-op
+    }
+
+    @Override
+    public void clearByPrefix(String prefix) {
+      // no-op
+    }
+
+    @Override
+    public void clearByGroup(String group) {
+      // no-op
     }
   }
 }

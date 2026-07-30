@@ -121,8 +121,10 @@ public class BingCacheAutoConfiguration {
     // 使用独立 keyPrefix（含双下划线哨兵）隔离版本号 key 与业务缓存 key，
     // 避免 RedisCacheManager.clear() 用 keyPrefix + "*" 扫描时误删版本号。
     // cacheName 不会包含双下划线哨兵，故业务 key 永远不会匹配此前缀。
+    // scanCount 复用 redis.scanCount 配置，与 RedisCacheManager 的前缀清除 SCAN 保持一致。
     return new CacheVersionStore(stringRedisTemplate,
-        properties.getRedis().getKeyPrefix() + "__version__:");
+        properties.getRedis().getKeyPrefix() + "__version__:",
+        properties.getRedis().getScanCount());
   }
 
   /**

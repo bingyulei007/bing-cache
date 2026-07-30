@@ -32,6 +32,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 
 /**
  * CacheKeyGenerator 单元测试.
@@ -929,6 +930,22 @@ class CacheKeyGeneratorTest {
     CacheKeyGenerator.validateReservedName("group", "");
     CacheKeyGenerator.validateReservedCacheName(null);
     CacheKeyGenerator.validateReservedCacheName("");
+  }
+
+  @Test
+  void testValidateCacheNameWithSpecialCharsDoesNotThrow() {
+    // 含特殊字符的 cacheName 不应抛异常，仅发出 WARN（当前实现下字面匹配仍可工作）
+    // 使用唯一前缀避免与其他测试的 WARN 去重集合冲突
+    assertDoesNotThrow(() -> CacheKeyGenerator.validateReservedCacheName("testSpecial:a:b"));
+    assertDoesNotThrow(() -> CacheKeyGenerator.validateReservedCacheName("testSpecial(name)"));
+    assertDoesNotThrow(() -> CacheKeyGenerator.validateReservedCacheName("testSpecial(paren"));
+  }
+
+  @Test
+  void testValidateCacheNameWithNormalCharsDoesNotWarn() {
+    // 普通字符（字母、数字、下划线、连字符）的 cacheName 不触发特殊字符警告
+    assertDoesNotThrow(() -> CacheKeyGenerator.validateReservedCacheName("normalCacheName"));
+    assertDoesNotThrow(() -> CacheKeyGenerator.validateReservedCacheName("user-detail_123"));
   }
 
   private Method getMethod(String name, Class<?>... paramTypes) {

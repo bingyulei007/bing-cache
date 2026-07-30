@@ -27,8 +27,12 @@ import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import org.springframework.context.expression.MethodBasedEvaluationContext;
 import org.springframework.core.ParameterNameDiscoverer;
@@ -63,12 +67,34 @@ import org.springframework.util.StringUtils;
  */
 public class CacheKeyGenerator {
 
+  private static final Logger LOG = LoggerFactory.getLogger(CacheKeyGenerator.class);
+
   private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper()
       .registerModule(new JavaTimeModule())
       .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
   /** 缓存 key 最大长度. */
   static final int MAX_KEY_LENGTH = 256;
+
+  /**
+   * cacheName 中不建议出现的特殊字符.
+   *
+   * <p>这些字符在 key 生成规则中有语义含义，出现在 cacheName 中会导致 key 结构混乱或
+   * clearByPrefix 边界匹配失效：</p>
+   * <ul>
+   *   <li>{@code (} / {@code )}：参数部分的定界符，cacheName 含此字符会破坏
+   *       {@code clearByPrefix} 追加 {@code (} 的精确匹配逻辑</li>
+   *   <li>{@code :}：group 命名空间分隔符，cacheName 含此字符可能与 group 版本 key 碰撞，
+   *       或导致 {@code clearByGroup} 误匹配</li>
+   * </ul>
+   * <p>注意：含这些字符的 cacheName 在当前实现下通常仍能工作（字面匹配），
+   * 但属于脆弱用法，未来版本可能收紧校验，故发出 WARN 提示。</p>
+   */
+  private static final Set<Character> SPECIAL_CHARS_IN_CACHE_NAME =
+      Set.of('(', ')', ':');
+
+  /** 已警告过特殊字符的 cacheName 集合，避免重复 WARN 日志. */
+  private static final Set<String> WARNED_SPECIAL_CACHE_NAMES = ConcurrentHashMap.newKeySet();
 
   /**
    * 内部保留的 group 名称，不允许业务使用.
@@ -99,6 +125,14 @@ public class CacheKeyGenerator {
 
   private final ParameterNameDiscoverer parameterNameDiscoverer;
 
+  /**
+   * SpEL 表达式解析结果缓存，避免对同一表达式重复解析.
+   *
+   * <p><b>有界前提</b>：{@code argSpel} 的值来自 {@code @BingCache}/{@code @BingCacheEvict}
+   * 注解属性，是编译期常量，数量等于应用中标注了 {@code argSpel} 的方法数，天然有界。
+   * 因此使用无界 {@link ConcurrentHashMap} 而非有界缓存。若未来支持动态表达式
+   * （如运行时注入 argSpel），需改为有界缓存（如 Caffeine + maximumSize）防止 OOM。</p>
+   */
   private final ConcurrentHashMap<String, Expression> expressionCache =
       new ConcurrentHashMap<>();
 
@@ -413,13 +447,47 @@ public class CacheKeyGenerator {
           "cacheName='" + cacheName + "' starts with reserved prefix '__group__:' and cannot be used "
           + "in @BingCache/@BingCacheEvict.");
     }
+    warnSpecialCharsInCacheName(cacheName);
+  }
+
+  /**
+   * 对 cacheName 中的特殊字符发出 WARN（每个 cacheName 仅警告一次）.
+   *
+   * <p>cacheName 含 {@code (}/{@code )}/{@code :} 等字符时，虽然当前实现下字面匹配仍可工作，
+   * 但属于脆弱用法：{@code (} 会干扰 clearByPrefix 的边界匹配，{@code :} 可能与 group
+   * 命名空间碰撞。此方法不抛异常，仅提示用户避免使用这些字符。</p>
+   *
+   * @param cacheName 待检查的缓存名称（调用方已保证非 null 非空）
+   */
+  private static void warnSpecialCharsInCacheName(String cacheName) {
+    for (int i = 0; i < cacheName.length(); i++) {
+      if (SPECIAL_CHARS_IN_CACHE_NAME.contains(cacheName.charAt(i))) {
+        if (WARNED_SPECIAL_CACHE_NAMES.add(cacheName)) {
+          LOG.warn("cacheName='{}' contains special character(s) from {{}}. "
+              + "These characters have semantic meaning in key generation and clearByPrefix/clearByGroup "
+              + "matching. While it may work currently via literal matching, it is a fragile usage "
+              + "and may break in future versions. Consider using only alphanumeric characters, "
+              + "underscores, or hyphens in cacheName.", cacheName, SPECIAL_CHARS_IN_CACHE_NAME);
+        }
+        return;
+      }
+    }
   }
 
   /**
    * 截断过长的 key.
    *
    * <p>当 key 长度超过 {@link #MAX_KEY_LENGTH} 时，截断到最大长度并追加
-   * 原始 key 的 SHA-256 哈希后缀（64 位），保证截断后的 key 仍然唯一。</p>
+   * 原始 key 的 SHA-256 哈希后缀（16 位十六进制 = 64 bit），保证截断后的 key 仍然唯一。</p>
+   *
+   * <p><b>碰撞概率</b>：两个不同原始 key 截断后相同，当且仅当它们 SHA-256 前 64 bit 相同，
+   * 概率约 2^-64，对单系统可忽略。截断点可能落在参数部分中间（如 {@code Sg[S:...} 被截断），
+   * 但截断后仍以 {@code prefix(} 开头（prefix 在前 220 字符内），因此 {@code clearByPrefix}
+   * / {@code clearByGroup} 的前缀匹配不受影响。</p>
+   *
+   * <p><b>长度说明</b>：{@link #MAX_KEY_LENGTH}（256）是<b>业务 key</b> 长度，不含 Redis
+   * key 前缀（如 {@code bing-cache:}）。实际 Redis key 为 {@code keyPrefix + 业务 key}，
+   * 若用户自定义 {@code keyPrefix} 较长，总长度可能影响 Redis 性能（建议 Redis key &lt; 1KB）。</p>
    *
    * @param key 原始 key
    * @return 截断后的 key（如未超长则原样返回）

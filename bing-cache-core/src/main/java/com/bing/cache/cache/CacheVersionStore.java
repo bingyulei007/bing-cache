@@ -58,9 +58,20 @@ public class CacheVersionStore {
   /** Group 版本号 key 的前缀分隔符，与 {@link #ALL_VERSION_SUFFIX} 风格一致. */
   static final String GROUP_VERSION_PREFIX = "__group__:";
 
+  /** 默认 SCAN COUNT，当未显式指定时使用. */
+  static final long DEFAULT_SCAN_COUNT = 100L;
+
   private final StringRedisTemplate stringRedisTemplate;
 
   private final String versionKeyPrefix;
+
+  /**
+   * SCAN 命令每次迭代返回的 key 数量提示.
+   *
+   * <p>用于 {@link #getActiveCacheNames()} 和 {@link #getActiveGroups()} 的版本 key 扫描。
+   * 值越大单次扫描开销越大但迭代次数越少。Redis 实际返回数量可能大于此值（仅作提示）。</p>
+   */
+  private final long scanCount;
 
   /**
    * 构造方法.
@@ -69,8 +80,24 @@ public class CacheVersionStore {
    * @param versionKeyPrefix    版本号 key 前缀，如 "bing-cache:__version__:"
    */
   public CacheVersionStore(StringRedisTemplate stringRedisTemplate, String versionKeyPrefix) {
+    this(stringRedisTemplate, versionKeyPrefix, DEFAULT_SCAN_COUNT);
+  }
+
+  /**
+   * 构造方法.
+   *
+   * @param stringRedisTemplate Redis 字符串操作模板
+   * @param versionKeyPrefix    版本号 key 前缀，如 "bing-cache:__version__:"
+   * @param scanCount           SCAN 命令每次迭代返回的 key 数量提示，必须为正数
+   */
+  public CacheVersionStore(StringRedisTemplate stringRedisTemplate, String versionKeyPrefix,
+      long scanCount) {
     this.stringRedisTemplate = Objects.requireNonNull(stringRedisTemplate, "stringRedisTemplate cannot be null");
     this.versionKeyPrefix = Objects.requireNonNull(versionKeyPrefix, "versionKeyPrefix cannot be null");
+    if (scanCount <= 0) {
+      throw new IllegalArgumentException("scanCount must be positive: " + scanCount);
+    }
+    this.scanCount = scanCount;
   }
 
   /**
@@ -159,7 +186,7 @@ public class CacheVersionStore {
     String pattern = versionKeyPrefix + "*";
     Optional<Set<String>> result = stringRedisTemplate.execute((RedisCallback<Optional<Set<String>>>) connection -> {
       Set<String> names = new HashSet<>();
-      ScanOptions options = ScanOptions.scanOptions().match(pattern).count(100).build();
+      ScanOptions options = ScanOptions.scanOptions().match(pattern).count(scanCount).build();
       var keyCommands = connection.keyCommands();
       if (keyCommands == null) {
         // keyCommands 为 null（集群模式、连接切换等瞬时状态），
@@ -192,7 +219,7 @@ public class CacheVersionStore {
     Optional<Set<String>> result = stringRedisTemplate.execute(
         (RedisCallback<Optional<Set<String>>>) connection -> {
         Set<String> groups = new HashSet<>();
-        ScanOptions options = ScanOptions.scanOptions().match(pattern).count(100).build();
+        ScanOptions options = ScanOptions.scanOptions().match(pattern).count(scanCount).build();
         var keyCommands = connection.keyCommands();
         if (keyCommands == null) {
           LOG.warn("Redis key commands are not available, skipping group scan");

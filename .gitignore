@@ -46,6 +46,9 @@ build/
 docs/
 docs/superpowers/
 
+### Local review notes ###
+adversarial-review.md
+
 ### CodeBuddy ###
 CODEBUDDY.md
 .workbuddy/

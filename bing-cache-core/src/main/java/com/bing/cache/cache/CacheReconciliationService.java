@@ -59,8 +59,14 @@ public class CacheReconciliationService implements SmartLifecycle {
    * 是否已完成一次可信的完整基线对账.
    *
    * <p>只有 cacheName 与 group 扫描都完成后才置为 true。若 Redis 抖动导致本轮对账中途失败，
-   * 保持 false 可避免把启动前已存在但尚未建立基线的版本 key 误判为“新增版本 key”并清理 L1。
+   * 保持 false 可避免把启动前已存在但尚未建立基线的版本 key 误判为"新增版本 key"并清理 L1。
    * 代价是失败期间新增的版本 key 会延后到下一次完整基线之后再按新增处理，属于保守降级。</p>
+   *
+   * <p><b>⚠️ 隐式前提：进程重启后 L1 为空。</b>{@code initialized=false} 期间不清除
+   * "启动前已存在的版本 key"对应的 L1，其正确性依赖一个事实：进程刚启动时 Caffeine L1
+   * 是空的，不存在需要清理的旧数据。一旦未来引入 L1 持久化或热升级（L1 跨重启保留），
+   * 此前提将被打破——启动前遗留的脏数据将无法通过对账清除，必须重新设计基线策略
+   * （例如：启动时无条件清理一次 L1，或基于"启动时刻 vs 版本 key 的 mtime"判断）。</p>
    */
   private volatile boolean initialized = false;
 
@@ -197,6 +203,8 @@ public class CacheReconciliationService implements SmartLifecycle {
         // 为避免保留该前缀下的旧 L1 数据，先清理再记录版本号。
         l1CacheManager.clearByPrefix(cacheName);
       }
+      // initialized=false 时不清除：前提是进程重启后 L1 为空（见 initialized 字段 Javadoc）。
+      // 若未来引入 L1 持久化，此处需改为启动时无条件清理。
       lastKnownVersions.put(cacheName, currentVersion);
       return;
     }
@@ -223,6 +231,8 @@ public class CacheReconciliationService implements SmartLifecycle {
         // 为避免保留该 group 下的旧 L1 数据，先清理再记录版本号。
         l1CacheManager.clearByGroup(group);
       }
+      // initialized=false 时不清除：前提是进程重启后 L1 为空（见 initialized 字段 Javadoc）。
+      // 若未来引入 L1 持久化，此处需改为启动时无条件清理。
       lastKnownGroupVersions.put(group, currentVersion);
       return;
     }
