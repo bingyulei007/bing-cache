@@ -57,6 +57,9 @@ CODEBUDDY.md
 .claude/
 CLAUDE.md
 
+### ZCode local files ###
+.zcode/
+
 ### Local runtime traces ###
 .instance-pids.txt
 *.log
