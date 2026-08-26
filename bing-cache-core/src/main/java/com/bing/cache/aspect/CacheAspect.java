@@ -127,7 +127,7 @@ public class CacheAspect {
 
     // cache result
     if (result != null) {
-      cacheManager.put(key, result, bingCache.expireTime());
+      cacheManager.put(key, result, bingCache.expireTime(), bingCache.maxSize());
       LOG.debug("Cache put: {}", key);
     } else if (bingCache.cacheNullValue()) {
       // null 值缓存：expireTime<=0（永不过期）时使用兜底 TTL，避免 null 占位符永久驻留 L1。
@@ -139,7 +139,7 @@ public class CacheAspect {
       if (bingCache.expireTime() <= 0) {
         warnNullValueFallback(method, bingCache.expireTime(), nullExpire);
       }
-      cacheManager.put(key, BingCacheNullValue.INSTANCE, nullExpire);
+      cacheManager.put(key, BingCacheNullValue.INSTANCE, nullExpire, bingCache.maxSize());
       LOG.debug("Cache put (null value): {}, expireSeconds={}", key, nullExpire);
     } else {
       LOG.debug("Cache skip (null result): {}", key);

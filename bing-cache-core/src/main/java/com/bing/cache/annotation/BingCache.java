@@ -151,4 +151,23 @@ public @interface BingCache {
    * @return 是否缓存 null 结果
    */
   boolean cacheNullValue() default false;
+
+  /**
+   * L1 缓存最大条目数（按前缀限容）.
+   *
+   * <p>默认值 5000，每个 {@code @BingCache} 方法默认拥有独立的 Caffeine 实例，
+   * 容量限制为该值，避免不同方法的缓存条目互相驱逐。</p>
+   *
+   * <p>设置为 0 时，该注解对应的缓存条目使用全局共享 Caffeine 实例
+   *（容量由 {@code bing.cache.caffeine.max-size} 配置，默认 5000）。</p>
+   *
+   * <p><b>解决的问题：</b>高基数方法（如分页查询，参数组合爆炸）的条目
+   * 会挤满全局池子，把其他方法的热点缓存（如字典）驱逐掉。
+   * 通过按前缀限容，每个方法缓存可以独立控制容量上限。</p>
+   *
+   * <p><b>作用范围：</b>仅 L1 本地缓存，L2 Redis 不受此限制。</p>
+   *
+   * @return L1 最大条目数，0 表示使用全局缓存
+   */
+  long maxSize() default 5000;
 }

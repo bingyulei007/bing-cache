@@ -82,7 +82,7 @@ class CompositeCacheManagerTest {
   @Test
   void testPutWritesToBothLevels() {
     compositeCacheManager.put("user:1", "value", 60);
-    verify(l1CacheManager).put("user:1", "value", 60);
+    verify(l1CacheManager).put("user:1", "value", 60, 0);
     verify(l2CacheManager).put("user:1", "value", 60);
   }
 
@@ -93,7 +93,7 @@ class CompositeCacheManagerTest {
   void testPutNullValueOnlyWritesL1() {
     Object nullValue = new BingCacheNullValue();
     compositeCacheManager.put("user:missing", nullValue, 60);
-    verify(l1CacheManager).put("user:missing", nullValue, 60);
+    verify(l1CacheManager).put("user:missing", nullValue, 60, 0);
     verify(l2CacheManager, never()).put("user:missing", nullValue, 60);
   }
 

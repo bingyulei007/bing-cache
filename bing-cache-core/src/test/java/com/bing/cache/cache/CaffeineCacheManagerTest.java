@@ -383,4 +383,303 @@ class CaffeineCacheManagerTest {
     assertTrue(cacheManager.keys().contains("key1"));
     assertTrue(cacheManager.keys().contains("key2"));
   }
+
+  // ========== maxSize 按前缀限容相关测试 ==========
+
+  /**
+   * 测试 maxSize 限制容量：写入超出容量的条目后，旧条目被淘汰.
+   */
+  @Test
+  void testMaxSizeEnforcesLimit() {
+    cacheManager.put("user([1])", "user1", 0, 2);
+    cacheManager.put("user([2])", "user2", 0, 2);
+    cacheManager.put("user([3])", "user3", 0, 2);
+
+    // 强制触发 Caffeine 维护任务，确保容量淘汰已执行
+    cacheManager.cleanUp();
+
+    // 容量为 2，写入 3 条，应保留最新的 2 条
+    int present = 0;
+    for (int i = 1; i <= 3; i++) {
+      if (cacheManager.get("user([" + i + "])") != null) {
+        present++;
+      }
+    }
+    assertTrue(present <= 2, "maxSize=2 应淘汰至少 1 条，实际保留 " + present + " 条");
+  }
+
+  /**
+   * 测试 maxSize=0 不限制容量.
+   */
+  @Test
+  void testMaxSizeZeroNoLimit() {
+    for (int i = 1; i <= 100; i++) {
+      cacheManager.put("dict([" + i + "])", "value" + i, 0, 0);
+    }
+    cacheManager.cleanUp();
+
+    // maxSize=0 走全局缓存，默认容量 5000，100 条不会触发淘汰
+    assertEquals("value1", cacheManager.get("dict([1])"));
+    assertEquals("value50", cacheManager.get("dict([50])"));
+    assertEquals("value100", cacheManager.get("dict([100])"));
+  }
+
+  /**
+   * 测试不同前缀的独立限容互不影响.
+   */
+  @Test
+  void testDifferentPrefixesIndependentLimits() {
+    // prefix "user" 限容 2
+    cacheManager.put("user([1])", "u1", 0, 2);
+    cacheManager.put("user([2])", "u2", 0, 2);
+    cacheManager.put("user([3])", "u3", 0, 2);
+
+    // prefix "dict" 限容 5
+    for (int i = 1; i <= 6; i++) {
+      cacheManager.put("dict([" + i + "])", "d" + i, 0, 5);
+    }
+
+    cacheManager.cleanUp();
+
+    // user 容量 2，保留最多 2 条
+    int userCount = 0;
+    for (int i = 1; i <= 3; i++) {
+      if (cacheManager.get("user([" + i + "])") != null) {
+        userCount++;
+      }
+    }
+    assertTrue(userCount <= 2, "user maxSize=2 应保留最多 2 条，实际 " + userCount);
+
+    // dict 容量 5，保留最多 5 条
+    int dictCount = 0;
+    for (int i = 1; i <= 6; i++) {
+      if (cacheManager.get("dict([" + i + "])") != null) {
+        dictCount++;
+      }
+    }
+    assertTrue(dictCount <= 5, "dict maxSize=5 应保留最多 5 条，实际 " + dictCount);
+  }
+
+  /**
+   * 测试限容缓存与全局缓存互不干扰.
+   */
+  @Test
+  void testSizedCacheDoesNotAffectGlobalCache() {
+    // 全局缓存写入 100 条
+    for (int i = 1; i <= 100; i++) {
+      cacheManager.put("global([" + i + "])", "g" + i, 0);
+    }
+
+    // 限容缓存写入 3 条（容量 2）
+    cacheManager.put("sized([1])", "s1", 0, 2);
+    cacheManager.put("sized([2])", "s2", 0, 2);
+    cacheManager.put("sized([3])", "s3", 0, 2);
+
+    cacheManager.cleanUp();
+
+    // 全局缓存 100 条不受影响
+    assertEquals("g1", cacheManager.get("global([1])"));
+    assertEquals("g100", cacheManager.get("global([100])"));
+
+    // 限容缓存受容量限制
+    int sizedCount = 0;
+    for (int i = 1; i <= 3; i++) {
+      if (cacheManager.get("sized([" + i + "])") != null) {
+        sizedCount++;
+      }
+    }
+    assertTrue(sizedCount <= 2, "sized maxSize=2 应保留最多 2 条，实际 " + sizedCount);
+  }
+
+  /**
+   * 测试 evict 同时从全局缓存和限容缓存中移除.
+   */
+  @Test
+  void testEvictFromSizedCache() {
+    cacheManager.put("user([1])", "u1", 0, 2);
+    cacheManager.put("user([2])", "u2", 0, 2);
+
+    cacheManager.evict("user([1])");
+
+    assertNull(cacheManager.get("user([1])"), "evict 应从限容缓存中移除");
+    assertEquals("u2", cacheManager.get("user([2])"), "其他 key 应保留");
+  }
+
+  /**
+   * 测试 clear 清空全局缓存和所有限容缓存.
+   */
+  @Test
+  void testClearWithSizedCache() {
+    cacheManager.put("global([1])", "g1", 0);
+    cacheManager.put("user([1])", "u1", 0, 2);
+    cacheManager.put("dict([1])", "d1", 0, 5);
+
+    cacheManager.clear();
+
+    assertNull(cacheManager.get("global([1])"));
+    assertNull(cacheManager.get("user([1])"));
+    assertNull(cacheManager.get("dict([1])"));
+  }
+
+  /**
+   * 测试 clearByPrefix 清除限容缓存.
+   */
+  @Test
+  void testClearByPrefixWithSizedCache() {
+    cacheManager.put("user([1])", "u1", 0, 2);
+    cacheManager.put("user([2])", "u2", 0, 2);
+    cacheManager.put("dict([1])", "d1", 0, 5);
+
+    cacheManager.clearByPrefix("user");
+
+    assertNull(cacheManager.get("user([1])"), "user prefix 应被清除");
+    assertNull(cacheManager.get("user([2])"), "user prefix 应被清除");
+    assertEquals("d1", cacheManager.get("dict([1])"), "dict prefix 应保留");
+  }
+
+  /**
+   * 测试 clearByGroup 清除限容缓存.
+   */
+  @Test
+  void testClearByGroupWithSizedCache() {
+    cacheManager.put("user:base([1])", "u1", 0, 2);
+    cacheManager.put("user:list([1])", "u2", 0, 3);
+    cacheManager.put("order:base([1])", "o1", 0, 5);
+
+    cacheManager.clearByGroup("user");
+
+    assertNull(cacheManager.get("user:base([1])"), "user group 应被清除");
+    assertNull(cacheManager.get("user:list([1])"), "user group 应被清除");
+    assertEquals("o1", cacheManager.get("order:base([1])"), "order group 应保留");
+  }
+
+  /**
+   * 测试 3 参 put 回填到已注册前缀的限容缓存（回填路径一致性）.
+   *
+   * <p>先通过 4 参 put 注册前缀，再通过 3 参 put 写入，
+   * 条目应路由到已注册的限容缓存，而非全局缓存。</p>
+   */
+  @Test
+  void testThreeParamPutRoutesToRegisteredSizedCache() {
+    // 先注册前缀 "user"
+    cacheManager.put("user([1])", "u1", 0, 2);
+
+    // 通过 3 参 put 写入（模拟回填路径）
+    cacheManager.put("user([2])", "u2", 0);
+    cacheManager.put("user([3])", "u3", 0);
+
+    cacheManager.cleanUp();
+
+    // 容量为 2，写入 3 条，应保留最多 2 条
+    int count = 0;
+    for (int i = 1; i <= 3; i++) {
+      if (cacheManager.get("user([" + i + "])") != null) {
+        count++;
+      }
+    }
+    assertTrue(count <= 2,
+        "3 参 put 应路由到已注册的限容缓存，容量 2 保留最多 2 条，实际 " + count);
+  }
+
+  /**
+   * 测试 evict 双侧兜底：独立缓存创建瞬间的竞态残留.
+   *
+   * <p>先通过 3 参 put 写入全局缓存（模拟回填在注册前进入全局缓存），
+   * 再通过 4 参 put 注册限容缓存，evict 应从双侧都移除。</p>
+   */
+  @Test
+  void testEvictClearsBothSides() {
+    // 模拟竞态：先写全局缓存（回填在注册前进入）
+    cacheManager.put("user([1])", "u1", 0);
+
+    // 注册限容缓存
+    cacheManager.put("user([1])", "u1_v2", 0, 2);
+
+    // evict 应从双侧移除
+    cacheManager.evict("user([1])");
+
+    assertNull(cacheManager.get("user([1])"),
+        "evict 应同时从全局缓存和限容缓存中移除");
+  }
+
+  /**
+   * 测试 clear 后限容缓存注册表不丢失，后续写入仍路由到限容缓存.
+   */
+  @Test
+  void testClearPreservesSizedCacheRegistry() {
+    // 注册限容缓存
+    cacheManager.put("user([1])", "u1", 0, 2);
+    cacheManager.clear();
+
+    // clear 后写入，应仍路由到限容缓存
+    cacheManager.put("user([1])", "u1_new", 0);
+    cacheManager.put("user([2])", "u2", 0);
+    cacheManager.put("user([3])", "u3", 0);
+
+    cacheManager.cleanUp();
+
+    int count = 0;
+    for (int i = 1; i <= 3; i++) {
+      if (cacheManager.get("user([" + i + "])") != null) {
+        count++;
+      }
+    }
+    assertTrue(count <= 2,
+        "clear 后注册表应保留，3 参 put 仍路由到限容缓存，容量 2 保留最多 2 条，实际 " + count);
+  }
+
+  /**
+   * 测试带 group 前缀的限容缓存.
+   */
+  @Test
+  void testMaxSizeWithGroupPrefix() {
+    cacheManager.put("user:list([1])", "u1", 0, 2);
+    cacheManager.put("user:list([2])", "u2", 0, 2);
+    cacheManager.put("user:list([3])", "u3", 0, 2);
+
+    cacheManager.cleanUp();
+
+    int count = 0;
+    for (int i = 1; i <= 3; i++) {
+      if (cacheManager.get("user:list([" + i + "])") != null) {
+        count++;
+      }
+    }
+    assertTrue(count <= 2,
+        "group 前缀的限容缓存应正确限制容量，实际保留 " + count + " 条");
+  }
+
+  /**
+   * 测试单值 args 格式 {@code prefix(Sg[...])} 的前缀提取.
+   */
+  @Test
+  void testMaxSizeWithSingleArgFormat() {
+    cacheManager.put("user(Sg[N:1])", "u1", 0, 2);
+    cacheManager.put("user(Sg[N:2])", "u2", 0, 2);
+    cacheManager.put("user(Sg[N:3])", "u3", 0, 2);
+
+    cacheManager.cleanUp();
+
+    int count = 0;
+    for (int i = 1; i <= 3; i++) {
+      if (cacheManager.get("user(Sg[N:" + i + "])") != null) {
+        count++;
+      }
+    }
+    assertTrue(count <= 2,
+        "Sg[...] 格式的限容缓存应正确限制容量，实际保留 " + count + " 条");
+  }
+
+  /**
+   * 测试无参格式 {@code prefix()} 的前缀提取.
+   */
+  @Test
+  void testMaxSizeWithNoArgFormat() {
+    cacheManager.put("health()", "ok", 0, 2);
+    cacheManager.put("health()", "ok2", 0, 2);
+    cacheManager.put("health()", "ok3", 0, 2);
+
+    // 同一个 key 覆盖写入，容量 2 但只有 1 个 key，不会触发淘汰
+    assertEquals("ok3", cacheManager.get("health()"));
+  }
 }

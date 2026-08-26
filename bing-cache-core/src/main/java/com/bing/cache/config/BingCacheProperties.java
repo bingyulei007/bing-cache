@@ -104,7 +104,7 @@ public class BingCacheProperties {
      * Caffeine Cache 的最大条目数.
      */
     @Min(1)
-    private long maxSize = 1000L;
+    private long maxSize = 5000L;
 
     /**
      * L1 最大存活秒数，0 表示不限制.

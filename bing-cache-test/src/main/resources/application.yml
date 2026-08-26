@@ -3,7 +3,7 @@ bing:
   cache:
     # Caffeine 本地缓存配置
     caffeine:
-      max-size: 1000
+      max-size: 5000
       l1-max-ttl: 300  # L1 最大存活 5 分钟
 
     # Redis 分布式缓存配置
@@ -21,10 +21,12 @@ bing:
 spring:
   data:
     redis:
-      host: cmac-mini
+      # 连接信息通过环境变量注入，避免仓库中硬编码真实凭据：
+      #   BING_CACHE_REDIS_HOST      默认 cmac-mini
+      #   BING_CACHE_REDIS_PASSWORD  无默认值，未设置时密码为空
+      host: ${BING_CACHE_REDIS_HOST:cmac-mini}
       port: 6379
-      password: RedRain123
-      database: 0
+      password: "${BING_CACHE_REDIS_PASSWORD:}"
 
 # 服务端口
 server:

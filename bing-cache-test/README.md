@@ -12,7 +12,7 @@ BingCache 的集成测试与功能演示工程。本模块是一个完整可运�
 |------|------|
 | JDK | 17+（推荐 21） |
 | Maven | 3.8+（仓库无 mvn wrapper，使用系统 `mvn`） |
-| Redis | `cmac-mini:6379`，密码 `RedRain123` |
+| Redis | `cmac-mini:6379`，密码通过环境变量 `BING_CACHE_REDIS_PASSWORD` 注入（不写入仓库） |
 
 > 所有命令须从**父仓库根目录**执行，使用 `-pl bing-cache-test -am` 以确保 Maven 先构建 `bing-cache-core`。
 
@@ -235,7 +235,7 @@ bing-cache-test/
 bing:
   cache:
     caffeine:
-      max-size: 1000
+      max-size: 5000
       l1-max-ttl: 300        # L1 最大 TTL 5 分钟
     redis:
       enabled: true
@@ -250,8 +250,8 @@ spring:
     redis:
       host: cmac-mini
       port: 6379
-      password: RedRain123
+      password: "${BING_CACHE_REDIS_PASSWORD:}"   # 环境变量注入，仓库不保存真实凭据
       database: 0
 ```
 
-如需在本地 Redis 运行，修改 `host` 为 `localhost` 并去掉 `password` 即可。
+如需在本地 Redis 运行，修改 `host` 为 `localhost` 并设置 `BING_CACHE_REDIS_PASSWORD`（无密码时留空即可）。

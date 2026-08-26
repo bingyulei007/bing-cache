@@ -11,6 +11,7 @@
 - **自动降级**：Redis 不可用时自动回退纯 L1 本地缓存模式，恢复后按对账配置处理 L1 脏数据
 - **L1 存活限制**：`l1-max-ttl` 限制 L1 条目最大存活时间，作为 Pub/Sub 丢失的兜底保障
 - **null 值防穿透**：`cacheNullValue` 属性支持缓存 null 结果，防止缓存穿透
+- **L1 前缀限容**：`maxSize` 属性按前缀独立控制 Caffeine 容量，默认 5000，避免高基数方法的条目挤满全局池子驱逐其他热点缓存
 - **SpEL Key 表达式**：`argSpel` 属性支持 SpEL 表达式从参数中选取值生成 key（如 `#user.id`），支持类似 Spring `@Cacheable` 的参数变量
 - **确定性 Key**：基于 Jackson 序列化生成 key，不依赖 `toString()`，重启后保持一致
 - **自动装配**：Spring Boot Starter 一键引入，根据 classpath 和配置自动选择缓存模式
@@ -88,6 +89,9 @@ public class DictService {
 | `argIndexes` | int[] | `{}` | 参与 key 生成的参数索引，空数组表示全部参数参与；`argSpel` 非空时忽略 |
 | `argSpel` | String | `""` | SpEL 表达式，从参数中选取值参与 key 生成（如 `#user.id`）；非空时优先于 `argIndexes` |
 | `cacheNullValue` | boolean | `false` | 是否缓存 null 结果，设为 `true` 可防止缓存穿透 |
+| `maxSize` | long | `5000` | L1 最大条目数（按前缀）。默认 5000，每个注解拥有独立 Caffeine 实例；设为 `0` 则使用全局共享缓存。仅限制 L1 本地容量，L2 Redis 不受此限制 |
+
+> **`maxSize` 按前缀生效**：同一 `cacheName` / `keyPrefix` 被多个 `@BingCache` 引用时，容量以**首次写入时**声明的 `maxSize` 为准（懒创建后即固定），后续不同值会被忽略。建议同一前缀始终使用相同的 `maxSize`。
 
 #### cacheName 与 keyPrefix 怎么选？
 
@@ -108,11 +112,11 @@ public class DictService {
 
 #### cacheName 命名约束
 
-**不推荐 `cacheName` 含冒号（`:`）**，建议使用单词或驼峰命名（如 `userDetail`、`userList`）。
+**`cacheName` 禁止含 `(` 或 `)`**：这两个字符是 key 生成中参数部分的定界符，cacheName 含此字符会破坏 `clearByPrefix` 边界匹配和 Caffeine 按前缀限容（`maxSize`）的路由。设置时直接抛 `IllegalArgumentException`。建议使用字母、数字、下划线、连字符命名（如 `userDetail`、`userList`）。
 
-原因：`@BingCache` / `@BingCacheEvict` 的 `group` 分组属性使用冒号作为 group 与 cacheName 的层级分隔符，缓存 key 格式为 `group:cacheName(args)`。若 `cacheName` 本身含冒号（如 `cacheName = "user:detail"`），其 key 前缀会与 `group = "user"` + `cacheName = "detail"` 产生的前缀完全相同。此时执行 `@BingCacheEvict(group = "user", allEntries = true)` 触发的 `clearByGroup("user")` 会按 `user:` 前缀匹配清除，**误清那些并未声明属于 `user` 组、只是 cacheName 恰好含冒号的缓存**。
+**不推荐 `cacheName` 含冒号（`:`）**：`@BingCache` / `@BingCacheEvict` 的 `group` 分组属性使用冒号作为 group 与 cacheName 的层级分隔符，缓存 key 格式为 `group:cacheName(args)`。若 `cacheName` 本身含冒号（如 `cacheName = "user:detail"`），其 key 前缀会与 `group = "user"` + `cacheName = "detail"` 产生的前缀完全相同。此时执行 `@BingCacheEvict(group = "user", allEntries = true)` 触发的 `clearByGroup("user")` 会按 `user:` 前缀匹配清除，**误清那些并未声明属于 `user` 组、只是 cacheName 恰好含冒号的缓存**。含冒号不会抛异常，仅发出 WARN 提示。
 
-`keyPrefix` 含冒号存在同样的碰撞风险，使用 group 时同样应避免。
+> **`keyPrefix` 不做字符校验**：`keyPrefix` 是字面匹配串，需要支持匹配默认前缀（默认前缀格式为 `className.methodName(paramTypes)`，本身含 `(`），因此允许含 `(` / `)` / `:` 等字符。但含冒号存在与 cacheName 同样的 group 碰撞风险，使用 group 时同样应避免。
 
 同理，`group` 本身也不应含冒号。若存在 `group="foo"` 与 `group="foo:bar"` 两个分组，`clearByGroup("foo")` 按 `foo:` 前缀匹配时会误清 `foo:bar:` 下的条目。建议 `group` 使用单词或驼峰命名（如 `user`、`orderDetail`）。
 
@@ -200,6 +204,14 @@ public List<DictVO> getDictList(String dictType) { ... }
 // 缓存 null 结果，防止缓存穿透
 @BingCache(cacheName = "user", expireTime = 60, cacheNullValue = true)
 public UserVO getUserById(Long id) { ... }
+
+// 限制 L1 缓存容量，避免高基数查询挤满全局池子（如分页查询）
+@BingCache(cacheName = "userList", expireTime = 120, maxSize = 100)
+public List<UserVO> queryUsers(String category, int page) { ... }
+
+// 不限制容量（0 使用全局共享缓存），适合字典等条目数固定的场景
+@BingCache(cacheName = "dict", expireTime = 3600, maxSize = 0)
+public List<DictVO> getDictList(String dictType) { ... }
 
 // ========== argSpel 场景：SpEL 表达式选取参数 ==========
 
@@ -504,6 +516,7 @@ public class UserService {
 | L2 命中但 TTL 查询返回 `-2` 或 `0` | 跳过 L1 回填，避免创建已经过期或即将过期的本地脏数据 |
 | 单 key `evict()` / `@BingCacheEvict(allEntries = false)` 或 `@BingCacheEvict(cacheName = "user", allEntries = false)` | 仅清除当前实例 L1 和 Redis L2 中的这个完整 key，并通过 Redis Pub/Sub 通知其他实例清除同一个 key；**即使配置了 `cacheName`，也不递增 cacheName/group/全局版本号，因此不会触发版本对账去清空同 cacheName 下的所有缓存**。若 Pub/Sub 丢失，只能依赖 `l1-max-ttl` 等待其他实例 L1 中该 key 过期 |
 | `clear()` / `clearByPrefix()` / `clearByGroup()` / `@BingCacheEvict(allEntries = true)` | 清除当前实例缓存并发布 Pub/Sub；在二级缓存模式下递增版本号（`clear`→全局版本、`clearByPrefix`→cacheName 版本、`clearByGroup`→group 版本），可由版本对账补偿 Pub/Sub 丢失 |
+| 参数序列化值恰好含 `(Sg[` 或 `([` 子串 + 该方法声明 `maxSize > 0` | L1 按前缀限容路由会误判 prefix（启发式 `lastIndexOf` 反推），条目可能落到独立的畸形 prefix 缓存实例，`clearByPrefix(cacheName)` 无法清除它，只能由 `l1-max-ttl` 自然过期兜底。**触发概率极低**——参数值需恰好包含 `(Sg[` 或 `([` 这个特定子串组合 |
 
 ## 缓存架构
 
@@ -619,7 +632,7 @@ Redis 恢复正常后：
 bing:
   cache:
     caffeine:
-      max-size: 1000                    # Caffeine Cache 的最大条目数（默认 1000）
+      max-size: 5000                    # 全局共享 Caffeine 实例的最大条目数（默认 5000；@BingCache(maxSize=0) 的条目使用此池子）
       l1-max-ttl: 0                     # L1 最大存活秒数，0 表示不限制（默认 0；L1+L2 模式下 0 会自动兜底为 300）
     redis:
       enabled: true                     # 是否启用 L2 Redis 缓存（默认 true）
@@ -638,7 +651,7 @@ bing:
 
 | 属性 | 默认值 | 说明 |
 |------|--------|------|
-| `bing.cache.caffeine.max-size` | `1000` | Caffeine Cache 的最大条目数 |
+| `bing.cache.caffeine.max-size` | `5000` | 全局共享 Caffeine 实例的最大条目数。仅对未声明 `maxSize`（或 `maxSize=0`）的缓存生效；注解声明的 `maxSize > 0` 时该前缀拥有独立的 Caffeine 实例，容量以注解为准 |
 | `bing.cache.caffeine.l1-max-ttl` | `0` | L1 最大存活秒数，0 表示不限制。设置后所有 L1 条目过期时间不超过该值，作为 Pub/Sub 丢失或 Redis 不可用时的兜底保障。**L1+L2 模式下若保持 0，组件会自动使用 300 秒作为兜底默认值**（因单 key evict 的 Pub/Sub 丢失无法通过对账补偿）；纯 L1 模式下 0 即不限制 |
 | `bing.cache.redis.enabled` | `true` | 是否启用 L2 Redis 缓存。仅在 classpath 存在 Redis 依赖且连接可用时生效；跨实例 `evict()` / `@BingCacheEvict` 失效通知依赖该模式下的 Redis Pub/Sub |
 | `bing.cache.redis.key-prefix` | `bing-cache:` | Redis 中缓存 key 的前缀，用于命名空间隔离 |
@@ -648,7 +661,7 @@ bing:
 | `bing.cache.redis.use-unlink` | `true` | 清理 Redis key 时优先使用 `UNLINK` 异步删除；UNLINK 失败时当前批次及后续批次自动降级为 `DEL`；DEL 失败时清理中断并触发降级记录（与 L1 降级流程一致） |
 | `bing.cache.redis.failure-log-interval` | `30` | Redis 降级期间重复失败日志的最小输出间隔，单位秒 |
 | `bing.cache.reconciliation.enabled` | `true` | 是否启用版本对账，补偿 Pub/Sub 消息丢失 |
-| `bing.cache.reconciliation.interval` | `30` | 版本对账间隔秒数 |
+| `bing.cache.reconciliation.interval` | `30` | 版本对账间隔秒数，取值范围 1~86400（24 小时），超出范围启动时校验失败 |
 
 ### 启用 L2 Redis 缓存
 
@@ -703,6 +716,9 @@ cacheManager.evict("user(Sg[N:1])");
 
 // 清除指定 cacheName 下的所有缓存（精确匹配 "user(" 前缀，不会误删 "userDetail" 等）
 cacheManager.clearByPrefix("user");
+
+// 清除指定分组下的所有缓存（匹配 "user:" 开头的整个命名空间）
+cacheManager.clearByGroup("user");
 
 // 清空所有缓存
 cacheManager.clear();

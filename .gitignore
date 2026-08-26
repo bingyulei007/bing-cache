@@ -60,6 +60,9 @@ CLAUDE.md
 ### ZCode local files ###
 .zcode/
 
+### CommandCode local files ###
+.commandcode/
+
 ### Local runtime traces ###
 .instance-pids.txt
 *.log

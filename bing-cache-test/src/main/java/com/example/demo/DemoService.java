@@ -6,7 +6,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
-import java.util.Random;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -16,7 +15,6 @@ import java.util.concurrent.atomic.AtomicLong;
 public class DemoService {
 
     private static final Logger LOG = LoggerFactory.getLogger(DemoService.class);
-    private final Random random = new Random();
 
     /**
      * 各缓存方法的方法体执行计数，用于测试区分"命中缓存"与"重新执行方法"。
@@ -66,7 +64,7 @@ public class DemoService {
         LOG.info("[BingCache] 执行 getOrderById({})...", orderId);
         // 模拟返回 null
         if (orderId > 1000) {
-            System.out.println("##进入数据库查询");
+            LOG.info("[BingCache] getOrderById({}) 查询结果为 null", orderId);
             return null;
         }
         return "Order-" + orderId + " [" + LocalDateTime.now() + "]";

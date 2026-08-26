@@ -57,7 +57,7 @@ AUTO_INSTANCES=true
 REDIS_CONTAINER="bing-cache-stress-redis"
 REDIS_IMAGE="docker.io/library/redis:7-alpine"
 REDIS_PORT=6379
-REDIS_PASSWORD="RedRain123"
+REDIS_PASSWORD="${BING_CACHE_TEST_REDIS_PASSWORD:-bing-cache-local}"
 
 # Thresholds
 CACHE_HIT_QPS_MIN=2000
@@ -444,7 +444,7 @@ start_instances() {
         # JVM args go before -jar, program args go after -jar
         local jvm_opts=""
         if [ -n "$redis_host" ]; then
-            jvm_opts="-Dspring.data.redis.host=$redis_host"
+            jvm_opts="-Dspring.data.redis.host=$redis_host -Dspring.data.redis.password=$REDIS_PASSWORD"
         fi
 
         # Run in background via java -jar (avoids Git Bash Maven wrapper issues)

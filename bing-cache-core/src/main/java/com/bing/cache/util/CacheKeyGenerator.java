@@ -77,24 +77,38 @@ public class CacheKeyGenerator {
   static final int MAX_KEY_LENGTH = 256;
 
   /**
-   * cacheName 中不建议出现的特殊字符.
+   * cacheName 中禁止出现的字符（出现即抛异常）.
    *
-   * <p>这些字符在 key 生成规则中有语义含义，出现在 cacheName 中会导致 key 结构混乱或
-   * clearByPrefix 边界匹配失效：</p>
+   * <p>这些字符在 key 生成规则中有强语义含义，出现在 cacheName 中会破坏 key 结构
+   * 或缓存路由/失效逻辑，必须禁止：</p>
    * <ul>
-   *   <li>{@code (} / {@code )}：参数部分的定界符，cacheName 含此字符会破坏
-   *       {@code clearByPrefix} 追加 {@code (} 的精确匹配逻辑</li>
-   *   <li>{@code :}：group 命名空间分隔符，cacheName 含此字符可能与 group 版本 key 碰撞，
-   *       或导致 {@code clearByGroup} 误匹配</li>
+   *   <li>{@code (} / {@code )}：参数部分的定界符。cacheName 含此字符会破坏
+   *       {@code clearByPrefix} 追加 {@code (} 的精确匹配逻辑，并使
+   *       {@link CaffeineCacheManager#extractPrefix} 的启发式反推失准，
+   *       导致 {@code maxSize} 按前缀限容时条目路由错误、失效泄漏。</li>
    * </ul>
-   * <p>注意：含这些字符的 cacheName 在当前实现下通常仍能工作（字面匹配），
-   * 但属于脆弱用法，未来版本可能收紧校验，故发出 WARN 提示。</p>
+   *
+   * <p><b>默认前缀不受此约束</b>：当未显式指定 cacheName/keyPrefix 时，
+   * key 生成器内部构造的默认前缀 {@code className.methodName(paramTypes)}
+   * 含 {@code (}，但该构造不经过此校验。默认前缀的 {@code (} 位于 args 分隔符
+   * 之前，{@code extractPrefix} 从右向左查找能正确识别 args 分隔符，不会误匹配。</p>
    */
-  private static final Set<Character> SPECIAL_CHARS_IN_CACHE_NAME =
-      Set.of('(', ')', ':');
+  private static final Set<Character> FORBIDDEN_CHARS_IN_CACHE_NAME =
+      Set.of('(', ')');
 
-  /** 已警告过特殊字符的 cacheName 集合，避免重复 WARN 日志. */
-  private static final Set<String> WARNED_SPECIAL_CACHE_NAMES = ConcurrentHashMap.newKeySet();
+  /**
+   * cacheName 中不建议出现但不会拒绝的字符（仅 WARN 提示）.
+   *
+   * <p>{@code :} 是 group 命名空间分隔符，cacheName 含此字符可能与 group 版本 key
+   * 碰撞，或导致 {@code clearByGroup} 误匹配。由于影响相对可控（字面匹配仍可工作），
+   * 当前实现仅提示，未来版本可能收紧。建议避免使用。</p>
+   */
+  private static final Set<Character> SOFT_DISCOURAGED_CHARS_IN_CACHE_NAME =
+      Set.of(':');
+
+  /** 已警告过软约束字符的 cacheName 集合，避免重复 WARN 日志. */
+  private static final Set<String> WARNED_SOFT_DISCOURAGED_CACHE_NAMES =
+      ConcurrentHashMap.newKeySet();
 
   /**
    * 内部保留的 group 名称，不允许业务使用.
@@ -183,6 +197,7 @@ public class CacheKeyGenerator {
       validateReservedCacheName(cacheName);
       prefix = cacheName;
     } else if (keyPrefix != null && !keyPrefix.isEmpty()) {
+      validateKeyPrefix(keyPrefix);
       prefix = keyPrefix;
     } else {
       // 默认前缀包含参数类型签名，避免同类同名重载方法 key 碰撞
@@ -421,14 +436,22 @@ public class CacheKeyGenerator {
   }
 
   /**
-   * 校验 cacheName 是否为内部保留名.
+   * 校验 cacheName 是否合法.
    *
-   * <p>保留的 cacheName 包括 {@code __all__}（与全局版本 key 碰撞，
-   * incrementVersion("__all__") 与 incrementAllVersion() 共用同一 Redis key）、
-   * 以及 {@code __group__:} 前缀（与 group 版本 key 碰撞）。</p>
+   * <p>校验顺序：</p>
+   * <ol>
+   *   <li>内部保留名校验：保留的 cacheName 包括 {@code __all__}（与全局版本 key 碰撞，
+   *       incrementVersion("__all__") 与 incrementAllVersion() 共用同一 Redis key）、
+   *       以及 {@code __group__:} 前缀（与 group 版本 key 碰撞）。</li>
+   *   <li>禁止字符校验：cacheName 含 {@code (} 或 {@code )} 时抛
+   *       {@link IllegalArgumentException}，详见
+   *       {@link #FORBIDDEN_CHARS_IN_CACHE_NAME}。</li>
+   *   <li>软约束字符提示：cacheName 含 {@code :} 时仅 WARN，不抛异常。</li>
+   * </ol>
    *
    * @param cacheName 待校验的缓存名称
-   * @throws IllegalStateException 如果值为保留名
+   * @throws IllegalStateException    如果值为保留名或以保留前缀开头
+   * @throws IllegalArgumentException 如果值含禁止字符 {@code (} 或 {@code )}
    */
   public static void validateReservedCacheName(String cacheName) {
     if (cacheName == null || cacheName.isEmpty()) {
@@ -447,27 +470,90 @@ public class CacheKeyGenerator {
           "cacheName='" + cacheName + "' starts with reserved prefix '__group__:' and cannot be used "
           + "in @BingCache/@BingCacheEvict.");
     }
-    warnSpecialCharsInCacheName(cacheName);
+    validateForbiddenCharsInCacheName(cacheName);
+    warnSoftDiscouragedCharsInCacheName(cacheName);
   }
 
   /**
-   * 对 cacheName 中的特殊字符发出 WARN（每个 cacheName 仅警告一次）.
+   * 校验 keyPrefix 是否合法.
    *
-   * <p>cacheName 含 {@code (}/{@code )}/{@code :} 等字符时，虽然当前实现下字面匹配仍可工作，
-   * 但属于脆弱用法：{@code (} 会干扰 clearByPrefix 的边界匹配，{@code :} 可能与 group
-   * 命名空间碰撞。此方法不抛异常，仅提示用户避免使用这些字符。</p>
+   * <p>keyPrefix 的语义是"作为业务 key 的字面前缀"，与 cacheName 不同：
+   * 它不参与 key 结构的构造，只是字符串拼接，因此<b>不做字符校验</b>——
+   * 允许含 {@code (} / {@code )} / {@code :} 等字符。这是有意为之，因为
+   * 用户经常用 keyPrefix 匹配默认前缀（如
+   * {@code com.foo.Service.getUser(Long)}）来实现对未显式命名方法的 evict，
+   * 而默认前缀本身就含 {@code (}。</p>
    *
-   * @param cacheName 待检查的缓存名称（调用方已保证非 null 非空）
+   * <p>仅做保留名校验：避免用户用 {@code __all__} 等保留名作 keyPrefix
+   * 与版本 key 命名空间产生潜在碰撞（虽然 key 结构不同，保守起见拒绝）。</p>
+   *
+   * @param keyPrefix 待校验的自定义前缀
+   * @throws IllegalStateException 如果值为保留名或以保留前缀开头
    */
-  private static void warnSpecialCharsInCacheName(String cacheName) {
+  public static void validateKeyPrefix(String keyPrefix) {
+    if (keyPrefix == null || keyPrefix.isEmpty()) {
+      return;
+    }
+    for (String reserved : RESERVED_CACHE_NAMES) {
+      if (reserved.equals(keyPrefix)) {
+        throw new IllegalStateException(
+            "keyPrefix='" + keyPrefix + "' is reserved for internal use and cannot be used "
+            + "in @BingCache/@BingCacheEvict. Reserved names: __all__, "
+            + "and any value starting with __group__:");
+      }
+    }
+    if (keyPrefix.startsWith(RESERVED_CACHE_NAME_PREFIX)) {
+      throw new IllegalStateException(
+          "keyPrefix='" + keyPrefix + "' starts with reserved prefix '__group__:' and cannot be used "
+          + "in @BingCache/@BingCacheEvict.");
+    }
+    // 不校验 ( ) : 等字符：keyPrefix 是字面匹配串，需支持匹配默认前缀（含 ( ）
+  }
+
+  /**
+   * 校验 cacheName 是否含禁止字符 {@code (} / {@code )}.
+   *
+   * <p>这两个字符是参数部分的定界符，出现在 cacheName 中会破坏 key 结构、
+   * clearByPrefix 边界匹配以及 Caffeine 按前缀限容的路由。见
+   * {@link #FORBIDDEN_CHARS_IN_CACHE_NAME}。</p>
+   *
+   * @param cacheName 待校验的缓存名称（调用方已保证非 null 非空）
+   * @throws IllegalArgumentException 如果 cacheName 含 {@code (} 或 {@code )}
+   */
+  private static void validateForbiddenCharsInCacheName(String cacheName) {
     for (int i = 0; i < cacheName.length(); i++) {
-      if (SPECIAL_CHARS_IN_CACHE_NAME.contains(cacheName.charAt(i))) {
-        if (WARNED_SPECIAL_CACHE_NAMES.add(cacheName)) {
-          LOG.warn("cacheName='{}' contains special character(s) from {{}}. "
-              + "These characters have semantic meaning in key generation and clearByPrefix/clearByGroup "
-              + "matching. While it may work currently via literal matching, it is a fragile usage "
-              + "and may break in future versions. Consider using only alphanumeric characters, "
-              + "underscores, or hyphens in cacheName.", cacheName, SPECIAL_CHARS_IN_CACHE_NAME);
+      char c = cacheName.charAt(i);
+      if (FORBIDDEN_CHARS_IN_CACHE_NAME.contains(c)) {
+        throw new IllegalArgumentException(
+            "cacheName='" + cacheName + "' contains forbidden character '" + c + "' "
+            + "from " + FORBIDDEN_CHARS_IN_CACHE_NAME + ". "
+            + "These characters are the args delimiter in key generation "
+            + "and will break clearByPrefix matching and per-prefix maxSize routing "
+            + "in CaffeineCacheManager. Use only alphanumeric characters, underscores, "
+            + "or hyphens in cacheName. If you need namespace separation, use the "
+            + "'group' attribute instead of embedding ':' or '(' in cacheName.");
+      }
+    }
+  }
+
+  /**
+   * 对 cacheName 中的软约束字符发出 WARN（每个 cacheName 仅警告一次）.
+   *
+   * <p>{@code :} 是 group 命名空间分隔符，cacheName 含此字符可能与 group 版本 key
+   * 碰撞，或导致 clearByGroup 误匹配。由于影响相对可控，当前实现仅提示，不抛异常。
+   * 建议使用 {@code group} 属性实现命名空间隔离，而非在 cacheName 中嵌入 {@code :}。</p>
+   *
+   * @param cacheName 待检查的缓存名称（调用方已保证非 null 非空且已通过禁止字符校验）
+   */
+  private static void warnSoftDiscouragedCharsInCacheName(String cacheName) {
+    for (int i = 0; i < cacheName.length(); i++) {
+      if (SOFT_DISCOURAGED_CHARS_IN_CACHE_NAME.contains(cacheName.charAt(i))) {
+        if (WARNED_SOFT_DISCOURAGED_CACHE_NAMES.add(cacheName)) {
+          LOG.warn("cacheName='{}' contains soft-discouraged character ':' "
+              + "from {}. ':' is the group namespace separator and may collide with "
+              + "group version keys or cause clearByGroup mismatch. Consider using the "
+              + "'group' attribute for namespace separation instead of embedding ':' "
+              + "in cacheName.", cacheName, SOFT_DISCOURAGED_CHARS_IN_CACHE_NAME);
         }
         return;
       }

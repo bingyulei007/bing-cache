@@ -36,7 +36,7 @@ class BingCachePropertiesTest {
     assertNotNull(properties.getCaffeine());
     assertNotNull(properties.getRedis());
     assertNotNull(properties.getReconciliation());
-    assertEquals(1000L, properties.getCaffeine().getMaxSize());
+    assertEquals(5000L, properties.getCaffeine().getMaxSize());
     assertEquals(0L, properties.getCaffeine().getL1MaxTtl());
     assertTrue(properties.getRedis().isEnabled());
     assertEquals("bing-cache:", properties.getRedis().getKeyPrefix());

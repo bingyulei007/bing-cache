@@ -94,13 +94,19 @@ public class CompositeCacheManager implements CacheManager {
 
   @Override
   public void put(String key, Object value, long expireSeconds) {
-    l1CacheManager.put(key, value, expireSeconds);
+    put(key, value, expireSeconds, 0);
+  }
+
+  @Override
+  public void put(String key, Object value, long expireSeconds, long maxSize) {
+    // maxSize 仅作用于 L1，L2 Redis 不受限
+    l1CacheManager.put(key, value, expireSeconds, maxSize);
     // NullValueSentinel 实现类（BingCacheNullValue）是包私有类，Jackson 无法反序列化，只存 L1 不存 L2
     if (!(value instanceof NullValueSentinel)) {
       l2CacheManager.put(key, value, expireSeconds);
-      LOG.debug("Cache put (L1+L2): {}, expireSeconds={}", key, expireSeconds);
+      LOG.debug("Cache put (L1+L2): {}, expireSeconds={}, maxSize={}", key, expireSeconds, maxSize);
     } else {
-      LOG.debug("Cache put (L1 only, NullValueSentinel): {}, expireSeconds={}", key, expireSeconds);
+      LOG.debug("Cache put (L1 only, NullValueSentinel): {}, expireSeconds={}, maxSize={}", key, expireSeconds, maxSize);
     }
   }
 

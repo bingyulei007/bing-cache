@@ -42,6 +42,22 @@ public interface CacheManager {
   void put(String key, Object value, long expireSeconds);
 
   /**
+   * 将值放入缓存（支持按前缀限容）.
+   *
+   * <p>默认实现委托给 {@link #put(String, Object, long)}，忽略 maxSize。
+   * 支持按前缀限容的实现（如 {@link CaffeineCacheManager}）应重写此方法，
+   * 根据 key 中提取的前缀和 maxSize 参数将条目路由到对应的独立缓存实例。</p>
+   *
+   * @param key           缓存 key
+   * @param value         缓存值，不允许为 null
+   * @param expireSeconds 过期时间（秒），0 表示不过期
+   * @param maxSize       前缀级最大条目数，0 表示使用全局缓存
+   */
+  default void put(String key, Object value, long expireSeconds, long maxSize) {
+    put(key, value, expireSeconds);
+  }
+
+  /**
    * 移除指定缓存.
    *
    * @param key 缓存 key

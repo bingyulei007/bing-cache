@@ -34,7 +34,6 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
     <spring-boot.version>3.5.13</spring-boot.version>
-    <org.mapstruct.version>1.5.5.Final</org.mapstruct.version>
     <maven-compiler-plugin.version>3.13.0</maven-compiler-plugin.version>
     <maven-source-plugin.version>3.3.1</maven-source-plugin.version>
     <maven-javadoc-plugin.version>3.7.0</maven-javadoc-plugin.version>

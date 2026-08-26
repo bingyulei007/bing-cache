@@ -933,12 +933,68 @@ class CacheKeyGeneratorTest {
   }
 
   @Test
-  void testValidateCacheNameWithSpecialCharsDoesNotThrow() {
-    // 含特殊字符的 cacheName 不应抛异常，仅发出 WARN（当前实现下字面匹配仍可工作）
+  void testValidateCacheNameWithForbiddenCharsThrows() {
+    // 含禁止字符 ( 或 ) 的 cacheName 必须抛 IllegalArgumentException：
+    // 这两个字符是 args 定界符，会破坏 clearByPrefix 边界匹配和
+    // Caffeine 按前缀限容的路由（extractPrefix 启发式反推）
+    IllegalArgumentException ex1 = assertThrows(
+        IllegalArgumentException.class,
+        () -> CacheKeyGenerator.validateReservedCacheName("testForbidden(name)"));
+    assertTrue(ex1.getMessage().contains("forbidden character"));
+    assertTrue(ex1.getMessage().contains("("));
+
+    IllegalArgumentException ex2 = assertThrows(
+        IllegalArgumentException.class,
+        () -> CacheKeyGenerator.validateReservedCacheName("testParen("));
+    assertTrue(ex2.getMessage().contains("forbidden character"));
+
+    IllegalArgumentException ex3 = assertThrows(
+        IllegalArgumentException.class,
+        () -> CacheKeyGenerator.validateReservedCacheName("testClose)"));
+    assertTrue(ex3.getMessage().contains("forbidden character"));
+  }
+
+  @Test
+  void testValidateCacheNameWithSoftDiscouragedCharDoesNotThrow() {
+    // 含软约束字符 : 的 cacheName 仅 WARN，不抛异常
     // 使用唯一前缀避免与其他测试的 WARN 去重集合冲突
-    assertDoesNotThrow(() -> CacheKeyGenerator.validateReservedCacheName("testSpecial:a:b"));
-    assertDoesNotThrow(() -> CacheKeyGenerator.validateReservedCacheName("testSpecial(name)"));
-    assertDoesNotThrow(() -> CacheKeyGenerator.validateReservedCacheName("testSpecial(paren"));
+    assertDoesNotThrow(() -> CacheKeyGenerator.validateReservedCacheName("testSoftDiscouraged:a:b"));
+  }
+
+  @Test
+  void testValidateKeyPrefixAppliesSameRulesAsCacheName() {
+    // keyPrefix 仅做保留名校验，不做字符校验
+    // 正常值通过
+    assertDoesNotThrow(() -> CacheKeyGenerator.validateKeyPrefix("userDetail"));
+    assertDoesNotThrow(() -> CacheKeyGenerator.validateKeyPrefix("user-detail_123"));
+
+    // null/空通过
+    assertDoesNotThrow(() -> CacheKeyGenerator.validateKeyPrefix(null));
+    assertDoesNotThrow(() -> CacheKeyGenerator.validateKeyPrefix(""));
+
+    // 保留名抛 IllegalStateException
+    IllegalStateException ex1 = assertThrows(
+        IllegalStateException.class,
+        () -> CacheKeyGenerator.validateKeyPrefix("__all__"));
+    assertTrue(ex1.getMessage().contains("reserved"));
+
+    // 保留前缀抛 IllegalStateException
+    IllegalStateException ex2 = assertThrows(
+        IllegalStateException.class,
+        () -> CacheKeyGenerator.validateKeyPrefix("__group__:user"));
+    assertTrue(ex2.getMessage().contains("reserved"));
+  }
+
+  @Test
+  void testValidateKeyPrefixAllowsForbiddenCharsForDefaultPrefixMatching() {
+    // keyPrefix 允许含 ( ) 等字符：用户需要用 keyPrefix 匹配默认前缀
+    // （默认前缀格式为 className.methodName(paramTypes)，本身含 ( )
+    // 来实现对未显式命名方法的 evict。这是合法且必要的用法。
+    assertDoesNotThrow(() -> CacheKeyGenerator.validateKeyPrefix(
+        "com.foo.UserService.getUserById(java.lang.Long)"));
+    assertDoesNotThrow(() -> CacheKeyGenerator.validateKeyPrefix("prefix(with(paren"));
+    assertDoesNotThrow(() -> CacheKeyGenerator.validateKeyPrefix("prefix)"));
+    assertDoesNotThrow(() -> CacheKeyGenerator.validateKeyPrefix("namespace:value"));
   }
 
   @Test

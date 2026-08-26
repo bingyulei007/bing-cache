@@ -10,7 +10,7 @@
 #
 # 配置需与 application.yml 对齐：
 #   spring.data.redis.port     = 6379
-#   spring.data.redis.password = RedRain123
+#   spring.data.redis.password = $REDIS_PASSWORD（环境变量可覆盖，见下方配置区）
 #   spring.data.redis.database = 0
 #
 # Usage:
@@ -27,7 +27,8 @@ set -euo pipefail
 CONTAINER_NAME="bing-cache-test-redis"
 REDIS_IMAGE="docker.io/library/redis:7-alpine"
 REDIS_PORT=6379
-REDIS_PASSWORD="RedRain123"        # application.yml: spring.data.redis.password
+REDIS_PASSWORD="${BING_CACHE_TEST_REDIS_PASSWORD:-bing-cache-local}"        # 本地临时 Redis 密码，环境变量可覆盖
+REDIS_PASSWORD_PROPERTY="spring.data.redis.password"
 REDIS_HOST_PROPERTY="spring.data.redis.host"
 
 # 默认跑全部启用的测试类 (MultiInstanceCacheTest 是 @Disabled，自然跳过)
@@ -122,4 +123,5 @@ echo ""
 echo -e "${YELLOW}=== Running tests with -D${REDIS_HOST_PROPERTY}=$VM_IP ===${NC}"
 cd "$REPO_ROOT"
 mvn -pl bing-cache-test -am "${MVN_ARGS[@]}" \
-    "-D${REDIS_HOST_PROPERTY}=${VM_IP}" test
+    "-D${REDIS_HOST_PROPERTY}=${VM_IP}" \
+    "-D${REDIS_PASSWORD_PROPERTY}=${REDIS_PASSWORD}" test
