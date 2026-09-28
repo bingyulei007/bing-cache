@@ -63,7 +63,8 @@ class CompositeCacheManagerTest {
   @Test
   void testGetL1MissL2Hit() {
     when(l1CacheManager.get("user:1")).thenReturn(null);
-    when(l2CacheManager.get("user:1")).thenReturn("l2-value");
+    when(l2CacheManager.getWithRemainingTtl("user:1"))
+        .thenReturn(new RedisCacheManager.CacheValueWithTtl("l2-value", 180L));
     when(l2CacheManager.getRemainingTtl("user:1")).thenReturn(180L);
     Object result = compositeCacheManager.get("user:1");
     assertEquals("l2-value", result);
@@ -74,7 +75,7 @@ class CompositeCacheManagerTest {
   @Test
   void testGetBothMiss() {
     when(l1CacheManager.get("user:1")).thenReturn(null);
-    when(l2CacheManager.get("user:1")).thenReturn(null);
+    when(l2CacheManager.getWithRemainingTtl("user:1")).thenReturn(null);
     Object result = compositeCacheManager.get("user:1");
     assertNull(result);
   }
@@ -163,7 +164,8 @@ class CompositeCacheManagerTest {
   @Test
   void testBackfillWithPositiveRemainingTtl() {
     when(l1CacheManager.get("user:1")).thenReturn(null);
-    when(l2CacheManager.get("user:1")).thenReturn("l2-value");
+    when(l2CacheManager.getWithRemainingTtl("user:1"))
+        .thenReturn(new RedisCacheManager.CacheValueWithTtl("l2-value", 298L));
     when(l2CacheManager.getRemainingTtl("user:1")).thenReturn(298L);
 
     Object result = compositeCacheManager.get("user:1");
@@ -177,7 +179,8 @@ class CompositeCacheManagerTest {
   @Test
   void testBackfillWithNoExpiry() {
     when(l1CacheManager.get("user:1")).thenReturn(null);
-    when(l2CacheManager.get("user:1")).thenReturn("l2-value");
+    when(l2CacheManager.getWithRemainingTtl("user:1"))
+        .thenReturn(new RedisCacheManager.CacheValueWithTtl("l2-value", -1L));
     when(l2CacheManager.getRemainingTtl("user:1")).thenReturn(-1L);
 
     Object result = compositeCacheManager.get("user:1");
@@ -191,8 +194,8 @@ class CompositeCacheManagerTest {
   @Test
   void testBackfillSkippedWhenKeyNotFound() {
     when(l1CacheManager.get("user:1")).thenReturn(null);
-    when(l2CacheManager.get("user:1")).thenReturn("l2-value");
-    when(l2CacheManager.getRemainingTtl("user:1")).thenReturn(-2L);
+    when(l2CacheManager.getWithRemainingTtl("user:1"))
+        .thenReturn(new RedisCacheManager.CacheValueWithTtl("l2-value", -2L));
 
     Object result = compositeCacheManager.get("user:1");
     // 返回 L2 的值，但不回填 L1
@@ -206,8 +209,8 @@ class CompositeCacheManagerTest {
   @Test
   void testBackfillSkippedWhenExpiring() {
     when(l1CacheManager.get("user:1")).thenReturn(null);
-    when(l2CacheManager.get("user:1")).thenReturn("l2-value");
-    when(l2CacheManager.getRemainingTtl("user:1")).thenReturn(0L);
+    when(l2CacheManager.getWithRemainingTtl("user:1"))
+        .thenReturn(new RedisCacheManager.CacheValueWithTtl("l2-value", 0L));
 
     Object result = compositeCacheManager.get("user:1");
     assertEquals("l2-value", result);
@@ -217,16 +220,16 @@ class CompositeCacheManagerTest {
   /**
    * 测试回填后二次校验检测到 L2 key 已被 evict（positive TTL 场景），立即清除 L1.
    *
-   * <p>模拟竞态：pre-check TTL=298s → put L1 → post-check TTL=-2（key 被 evict）。
-   * post-check 检测到 key 消失，立即 evict L1，避免旧值驻留。</p>
+   * <p>模拟竞态：pipeline 返回 TTL=298s → put L1 → post-check TTL=-2（key 被 evict）。
+   * post-check 检测到 key 消失，立即 evict L1，避免旧值驻留。
+   * 注意：GET+TTL 已合并进同一次 pipeline（getWithRemainingTtl），getRemainingTtl 仅用于 post-check。</p>
    */
   @Test
   void testBackfillPostCheckEvictsWhenKeyDisappeared() {
     when(l1CacheManager.get("user:1")).thenReturn(null);
-    when(l2CacheManager.get("user:1")).thenReturn("l2-value");
-    when(l2CacheManager.getRemainingTtl("user:1"))
-        .thenReturn(298L)   // pre-check
-        .thenReturn(-2L);   // post-check
+    when(l2CacheManager.getWithRemainingTtl("user:1"))
+        .thenReturn(new RedisCacheManager.CacheValueWithTtl("l2-value", 298L));
+    when(l2CacheManager.getRemainingTtl("user:1")).thenReturn(-2L);
 
     Object result = compositeCacheManager.get("user:1");
     assertEquals("l2-value", result);
@@ -240,10 +243,9 @@ class CompositeCacheManagerTest {
   @Test
   void testBackfillPostCheckEvictsWhenNoExpiryKeyDisappeared() {
     when(l1CacheManager.get("user:1")).thenReturn(null);
-    when(l2CacheManager.get("user:1")).thenReturn("l2-value");
-    when(l2CacheManager.getRemainingTtl("user:1"))
-        .thenReturn(-1L)   // pre-check (no expiry)
-        .thenReturn(-2L);  // post-check (key evicted)
+    when(l2CacheManager.getWithRemainingTtl("user:1"))
+        .thenReturn(new RedisCacheManager.CacheValueWithTtl("l2-value", -1L));
+    when(l2CacheManager.getRemainingTtl("user:1")).thenReturn(-2L);
 
     Object result = compositeCacheManager.get("user:1");
     assertEquals("l2-value", result);
@@ -257,7 +259,8 @@ class CompositeCacheManagerTest {
   @Test
   void testBackfillPostCheckKeepsL1WhenKeyStillExists() {
     when(l1CacheManager.get("user:1")).thenReturn(null);
-    when(l2CacheManager.get("user:1")).thenReturn("l2-value");
+    when(l2CacheManager.getWithRemainingTtl("user:1"))
+        .thenReturn(new RedisCacheManager.CacheValueWithTtl("l2-value", 298L));
     when(l2CacheManager.getRemainingTtl("user:1")).thenReturn(298L);
 
     Object result = compositeCacheManager.get("user:1");

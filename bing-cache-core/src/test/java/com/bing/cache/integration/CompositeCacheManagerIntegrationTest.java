@@ -43,6 +43,7 @@ import org.springframework.data.redis.serializer.StringRedisSerializer;
 import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 /**
@@ -63,6 +64,8 @@ class CompositeCacheManagerIntegrationTest {
   private CompositeCacheManager cacheManager;
 
   private CaffeineCacheManager l1Only;
+
+  private RedisCacheManager l2Only;
 
   private StringRedisTemplate stringRedisTemplate;
 
@@ -105,6 +108,7 @@ class CompositeCacheManagerIntegrationTest {
     cacheManager = new CompositeCacheManager(l1, l2, publisher);
 
     l1Only = l1;
+    l2Only = l2;
 
     // Clean up Redis keys from previous tests
     cleanRedisKeys(objectRedisTemplate);
@@ -213,6 +217,34 @@ class CompositeCacheManagerIntegrationTest {
     // Key should exist in Redis with TTL
     Long ttl = stringRedisTemplate.getExpire(KEY_PREFIX + "ttl:key", java.util.concurrent.TimeUnit.SECONDS);
     assertEquals(true, ttl != null && ttl > 0 && ttl <= 2);
+  }
+
+  @Test
+  void testGetWithRemainingTtlHitCarriesRealTtl() {
+    // 真实 Redis 下验证 pipeline 的值反序列化与 TTL 整型回复
+    cacheManager.put("ttl:read", "value", 120);
+    RedisCacheManager.CacheValueWithTtl result = l2Only.getWithRemainingTtl("ttl:read");
+    assertNotNull(result);
+    assertEquals("value", result.value());
+    if (result.remainingTtl() <= 0 || result.remainingTtl() > 120) {
+      throw new AssertionError("Unexpected remainingTtl: " + result.remainingTtl());
+    }
+  }
+
+  @Test
+  void testGetWithRemainingTtlNoExpiryReturnsMinusOne() {
+    // 永不过期的 key：pipeline 应返回 TTL == -1，调用方据此让 L1 也永不过期
+    cacheManager.put("ttl:forever", "value", 0);
+    RedisCacheManager.CacheValueWithTtl result = l2Only.getWithRemainingTtl("ttl:forever");
+    assertNotNull(result);
+    assertEquals("value", result.value());
+    assertEquals(-1L, result.remainingTtl());
+  }
+
+  @Test
+  void testGetWithRemainingTtlMissReturnsNull() {
+    // key 不存在时 pipeline 的 GET 返回空回复，整条结果应为 null
+    assertNull(l2Only.getWithRemainingTtl("absent:key"));
   }
 
   private void assertEquals(Object expected, Object actual) {

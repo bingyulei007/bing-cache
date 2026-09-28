@@ -80,12 +80,13 @@ public class CompositeCacheManager implements CacheManager {
       return value;
     }
 
-    // L1 未命中，查询 L2
-    value = l2CacheManager.get(key);
-    if (value != null) {
+    // L1 未命中，单次 pipeline 往返从 L2 取值 + 剩余 TTL（GET 与 TTL 同批发出，
+    // 替代原先 GET → TTL 两次往返）
+    RedisCacheManager.CacheValueWithTtl l2Result = l2CacheManager.getWithRemainingTtl(key);
+    if (l2Result != null) {
       LOG.debug("L2 cache hit, backfilling L1: {}", key);
-      backfillL1(key, value);
-      return value;
+      backfillL1(key, l2Result.value(), l2Result.remainingTtl());
+      return l2Result.value();
     }
 
     LOG.debug("L1+L2 cache miss: {}", key);
@@ -179,37 +180,40 @@ public class CompositeCacheManager implements CacheManager {
   /**
    * L2 回填 L1，处理竞态场景.
    *
-   * <p>回填时通过 Redis TTL 命令获取 L2 的剩余过期时间：
+   * <p>value 与 remainingTtl 由 {@link RedisCacheManager#getWithRemainingTtl(String)}
+   * 在同一个 pipeline 往返内取得（GET 与 TTL 同批发出，不保证同一时刻）。
+   * 按 remainingTtl 决定回填策略：
    * <ul>
    *   <li>remainingTtl &gt; 0：使用剩余 TTL 回填 L1</li>
    *   <li>remainingTtl == -1：L2 永不过期，L1 也永不过期</li>
    *   <li>remainingTtl == -2 或 0：L2 中 key 已不存在或即将过期，跳过回填</li>
    * </ul>
    *
-   * <p>回填后进行二次校验：再次查询 L2 TTL，若 key 已不存在（TTL == -2），
-   * 说明在首次 TTL 校验与 put 之间 key 被 evict，立即清除 L1 中刚写入的旧值。
+   * <p>回填后进行二次校验（post-check，1 次额外往返，回填路径共 2 次往返）：
+   * 再次查询 L2 TTL，若 key 已不存在（TTL == -2），
+   * 说明在读取 L2 与 L1 put 之间 key 被 evict，立即清除 L1 中刚写入的旧值。
    * 这将单 key evict 的竞态窗口缩小至接近零。单 key evict 不写版本号，
    * 对账服务无法补偿此场景，二次校验是除 l1-max-ttl 外的唯一补偿手段。</p>
    *
-   * @param key   缓存 key
-   * @param value 缓存值
+   * @param key          缓存 key
+   * @param value        缓存值（来自 L2）
+   * @param remainingTtl L2 剩余过期秒数（与 value 同批取得）
    */
-  private void backfillL1(String key, Object value) {
-    long remainingTtl = l2CacheManager.getRemainingTtl(key);
+  private void backfillL1(String key, Object value, long remainingTtl) {
     if (remainingTtl > 0) {
       l1CacheManager.put(key, value, remainingTtl);
     } else if (remainingTtl == -1L) {
       // L2 永不过期，L1 也永不过期
       l1CacheManager.put(key, value, 0L);
     } else {
-      // remainingTtl == -2（key 不存在）或 0（即将过期）
+      // remainingTtl == -2（key 不存在/TTL 不可得）或 0（即将过期）
       // 跳过回填，避免在 L1 创建永不过期的脏数据
       LOG.warn("Skip L1 backfill for key '{}': L2 remaining TTL is {} "
-          + "(key may have expired or been deleted between L2 hit and TTL check)", key, remainingTtl);
+          + "(key may have expired or been deleted)", key, remainingTtl);
       return;
     }
     // 二次校验：put 之后再次检查 L2 key 是否仍然存在。
-    // 若首次 getRemainingTtl 与 put 之间 key 被 evict，post-check 会检测到 TTL=-2，
+    // 若读取 L2 与 L1 put 之间 key 被 evict，post-check 会检测到 TTL=-2，
     // 立即清除 L1 中刚写入的旧值，缩小竞态窗口至接近零。
     long postCheckTtl = l2CacheManager.getRemainingTtl(key);
     if (postCheckTtl == -2L) {

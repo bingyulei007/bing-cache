@@ -24,6 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
@@ -35,6 +36,9 @@ import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Deque;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -51,8 +55,10 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.RedisCallback;
+import org.springframework.data.redis.core.RedisOperations;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.ScanOptions;
+import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.data.redis.core.Cursor;
 import org.springframework.data.redis.connection.RedisConnection;
@@ -97,6 +103,177 @@ class RedisCacheManagerTest {
     when(valueOperations.get(anyString())).thenThrow(new RuntimeException("Redis error"));
     Object result = redisCacheManager.get("user:1");
     assertNull(result);
+  }
+
+  @Test
+  void testGetDoesNotUsePipeline() {
+    // get() 只需取值，不应走 pipeline（避免为纯读操作引入多余的往返/管线开销）
+    when(valueOperations.get("bing-cache:user:1")).thenReturn("cached-value");
+    assertEquals("cached-value", redisCacheManager.get("user:1"));
+    verify(redisTemplate, never()).executePipelined(any(SessionCallback.class));
+  }
+
+  @Test
+  void testGetWithRemainingTtlSessionCallbackReturnsNull() {
+    // pipelined SessionCallback 返回非 null 时 Spring 会抛 InvalidDataAccessApiUsageException
+    stubPipelineResults("cached-value", 180L);
+    redisCacheManager.getWithRemainingTtl("user:1");
+    assertNull(pipelineCallbackResult);
+  }
+
+  @Test
+  void testGetWithRemainingTtlHit() {
+    stubPipelineResults("cached-value", 180L);
+    RedisCacheManager.CacheValueWithTtl result = redisCacheManager.getWithRemainingTtl("user:1");
+    assertNotNull(result);
+    assertEquals("cached-value", result.value());
+    assertEquals(180L, result.remainingTtl());
+    // GET 与 TTL 两条命令都必须使用带命名空间前缀的同一个 key
+    assertEquals(List.of("bing-cache:user:1", "bing-cache:user:1"), pipelineKeys());
+  }
+
+  @Test
+  void testGetWithRemainingTtlNoExpiry() {
+    stubPipelineResults("cached-value", -1L);
+    RedisCacheManager.CacheValueWithTtl result = redisCacheManager.getWithRemainingTtl("user:1");
+    assertNotNull(result);
+    assertEquals("cached-value", result.value());
+    assertEquals(-1L, result.remainingTtl());
+  }
+
+  @Test
+  void testGetWithRemainingTtlMiss() {
+    // key 不存在：GET 返回空回复
+    stubPipelineResults(null, -2L);
+    assertNull(redisCacheManager.getWithRemainingTtl("user:1"));
+  }
+
+  @Test
+  void testGetWithRemainingTtlEmptyReply() {
+    // 管线返回空列表（防御性：例如回调未产出任何结果）
+    stubPipelineResults();
+    assertNull(redisCacheManager.getWithRemainingTtl("user:1"));
+  }
+
+  @Test
+  void testGetWithRemainingTtlMissingTtlElementFallsBackToKeyAbsent() {
+    // TTL 元素缺失：按 key 不存在（-2）处理，调用方据此跳过 L1 回填
+    stubPipelineResults("cached-value");
+    RedisCacheManager.CacheValueWithTtl result = redisCacheManager.getWithRemainingTtl("user:1");
+    assertNotNull(result);
+    assertEquals("cached-value", result.value());
+    assertEquals(-2L, result.remainingTtl());
+  }
+
+  @Test
+  void testGetWithRemainingTtlNullTtlElementFallsBackToKeyAbsent() {
+    // TTL 元素为 null（异常回复）：按 -2 处理，调用方跳过回填
+    stubPipelineResults("cached-value", null);
+    RedisCacheManager.CacheValueWithTtl result = redisCacheManager.getWithRemainingTtl("user:1");
+    assertNotNull(result);
+    assertEquals("cached-value", result.value());
+    assertEquals(-2L, result.remainingTtl());
+  }
+
+  @Test
+  void testGetWithRemainingTtlCustomKeyPrefix() {
+    RedisCacheManager customManager = new RedisCacheManager(redisTemplate, "myapp:");
+    stubPipelineResults("value", 60L);
+    RedisCacheManager.CacheValueWithTtl result = customManager.getWithRemainingTtl("user:1");
+    assertNotNull(result);
+    assertEquals("value", result.value());
+    assertEquals(60L, result.remainingTtl());
+    assertEquals(List.of("myapp:user:1", "myapp:user:1"), pipelineKeys());
+  }
+
+  @Test
+  void testGetWithRemainingTtlHandlesException() {
+    when(redisTemplate.executePipelined(any(SessionCallback.class)))
+        .thenThrow(new RuntimeException("Redis error"));
+    assertNull(redisCacheManager.getWithRemainingTtl("user:1"));
+  }
+
+  @Test
+  void testGetWithRemainingTtlMissCountsAsSuccess() throws Exception {
+    // 未命中是正常结果，应计入成功（重置失败计数），不得推进降级阈值
+    setConsecutiveFailures(2);
+    stubPipelineResults(null, -2L);
+    redisCacheManager.getWithRemainingTtl("user:1");
+    assertEquals(0, consecutiveFailures());
+  }
+
+  @Test
+  void testGetWithRemainingTtlExceptionCountsAsFailureOnce() throws Exception {
+    stubPipelineResults();
+    when(redisTemplate.executePipelined(any(SessionCallback.class)))
+        .thenThrow(new RuntimeException("Redis error"));
+    redisCacheManager.getWithRemainingTtl("user:1");
+    // 一次逻辑操作只能计一次失败（避免 3 次阈值被 2 次调用触发）
+    assertEquals(1, consecutiveFailures());
+  }
+
+  /**
+   * 让 {@code redisTemplate.executePipelined(...)} 真实执行传入的 SessionCallback.
+   *
+   * <p>mock 的 {@link RedisOperations} 会按调用顺序收集 SessionCallback 内发出的每条命令
+   * 与其结果，并作为管线结果列表返回——与 Spring Data Redis 的真实行为一致
+   * （pipelined SessionCallback 返回 {@code null}，结果由 executePipelined 统一收集）。
+   * 这样测试断言的是生产代码实际使用的 API（{@code opsForValue().get} + {@code getExpire}）
+   * 以及它传入的 key，而不是只验证 mock 的返回值。</p>
+   *
+   * @param results 按序排列的命令结果（null 表示空回复）
+   */
+  @SuppressWarnings("unchecked")
+  private void stubPipelineResults(Object... results) {
+    RedisOperations<String, Object> operations = mock(RedisOperations.class);
+    ValueOperations<String, Object> pipelineValueOps = mock(ValueOperations.class);
+    when(operations.opsForValue()).thenReturn(pipelineValueOps);
+
+    Deque<Object> pending = new LinkedList<>(Arrays.asList(results));
+    List<Object> collected = new ArrayList<>();
+    List<String> keys = new ArrayList<>();
+    when(pipelineValueOps.get(anyString())).thenAnswer(invocation -> {
+      String key = invocation.getArgument(0);
+      Object value = pending.poll();
+      keys.add(key);
+      collected.add(value);
+      return value;
+    });
+    when(operations.getExpire(anyString(), any(TimeUnit.class))).thenAnswer(invocation -> {
+      String key = invocation.getArgument(0);
+      Object ttl = pending.poll();
+      keys.add(key);
+      collected.add(ttl);
+      return ttl;
+    });
+
+    when(redisTemplate.executePipelined(any(SessionCallback.class))).thenAnswer(invocation -> {
+      pipelineKeys = keys;
+      pipelineCallbackResult = ((SessionCallback<Object>) invocation.getArgument(0))
+          .execute(operations);
+      return new ArrayList<>(collected);
+    });
+  }
+
+  private List<String> pipelineKeys;
+
+  private Object pipelineCallbackResult;
+
+  /** 返回最近一次管线中实际送往 Redis 的 key 列表（GET 与 TTL 各一条，顺序固定）. */
+  private List<String> pipelineKeys() {
+    return pipelineKeys;
+  }
+
+  private int consecutiveFailures() throws Exception {
+    Field field = RedisCacheManager.class.getDeclaredField("consecutiveFailures");
+    field.setAccessible(true);
+    return ((AtomicInteger) field.get(redisCacheManager)).get();
+  }
+
+  private void setConsecutiveFailures(int value) throws Exception {
+    Field field = RedisCacheManager.class.getDeclaredField("consecutiveFailures");
+    field.setAccessible(true);
+    ((AtomicInteger) field.get(redisCacheManager)).set(value);
   }
 
   @Test

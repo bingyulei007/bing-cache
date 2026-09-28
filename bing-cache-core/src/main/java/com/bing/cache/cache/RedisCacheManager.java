@@ -22,8 +22,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.connection.RedisConnection;
 import org.springframework.data.redis.connection.RedisKeyCommands;
 import org.springframework.data.redis.core.RedisCallback;
+import org.springframework.data.redis.core.RedisOperations;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.ScanOptions;
+import org.springframework.data.redis.core.SessionCallback;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -418,6 +420,82 @@ public class RedisCacheManager implements CacheManager {
 
   private String redisKey(String key) {
     return keyPrefix + key;
+  }
+
+  /**
+   * 读取缓存值与剩余 TTL（单次 pipeline 往返内完成 GET + TTL）.
+   *
+   * <p>供 L2 命中后的 L1 回填使用：回填需要剩余 TTL 以避免 L1 条目比 L2 更长寿。
+   * 两条命令在同一个 pipeline 中发出、共用一次网络往返，替代原先
+   * "GET → TTL" 两次独立往返；配合 {@code CompositeCacheManager} 中的
+   * post-check 校验，回填路径总往返由 3 次降为 2 次。</p>
+   *
+   * <p>选择 pipeline 而非 Lua 脚本：GET/TTL 均为只读命令，pipeline 无需
+   * Redis 服务端开启 EVAL/EVALSHA 能力（ACL 默认禁用脚本、rename-command 移除脚本、
+   * 部分代理网关不支持脚本的场景同样可用），也不阻塞服务端执行。
+   * 代价是 GET 与 TTL 来自两个时刻（其他客户端的命令可插入其间），
+   * 但该竞态窗口原本就存在，且已由回填后的 post-check 兜底，
+   * 因此不需要用脚本原子性换取。</p>
+   *
+   * <p>未命中时返回 {@code null}；Redis 异常时按降级逻辑计一次失败并返回 {@code null}。</p>
+   *
+   * @param key 缓存 key（不含 Redis 前缀）
+   * @return 值与剩余 TTL；key 不存在或 Redis 异常时返回 null
+   */
+  public CacheValueWithTtl getWithRemainingTtl(String key) {
+    String redisKey = redisKey(key);
+    try {
+      List<Object> results = redisTemplate.executePipelined(new SessionCallback<Object>() {
+        @Override
+        @SuppressWarnings("unchecked")
+        public Object execute(RedisOperations operations) {
+          operations.opsForValue().get(redisKey);
+          operations.getExpire(redisKey, TimeUnit.SECONDS);
+          // pipelined SessionCallback 必须返回 null：结果由 executePipelined 统一收集，
+          // 返回非 null 会抛 InvalidDataAccessApiUsageException
+          return null;
+        }
+      });
+      recordSuccess();
+      if (results == null || results.isEmpty() || results.get(0) == null) {
+        LOG.debug("Redis cache miss: {}", redisKey);
+        return null;
+      }
+      long remainingTtl = extractRemainingTtl(results);
+      LOG.debug("Redis cache hit: {}, remainingTtl={}", redisKey, remainingTtl);
+      return new CacheValueWithTtl(results.get(0), remainingTtl);
+    } catch (Exception e) {
+      recordFailure("getWithRemainingTtl", redisKey, e);
+      return null;
+    }
+  }
+
+  /**
+   * 从 pipeline 结果中提取 TTL.
+   *
+   * <p>正常情况下 {@code results.get(1)} 是 {@link Long}（Redis 整型回复，
+   * 经 {@code RedisTemplate} 的管线结果反序列化后原样透传）。
+   * 此处兼容任意 {@link Number}；元素缺失或为 {@code null}（异常回复）时按
+   * key 不存在（-2）处理，让调用方跳过 L1 回填，而不是写入一条永不过期的脏数据。</p>
+   */
+  private static long extractRemainingTtl(List<Object> results) {
+    if (results.size() < 2) {
+      return -2L;
+    }
+    Object ttl = results.get(1);
+    if (ttl instanceof Number number) {
+      return number.longValue();
+    }
+    return -2L;
+  }
+
+  /**
+   * L2 读取结果：值与剩余 TTL（由 {@link #getWithRemainingTtl(String)} 同一次 pipeline 往返取得）.
+   *
+   * @param value        缓存值
+   * @param remainingTtl 剩余过期秒数；-1 表示永不过期；-2 表示 key 不存在或 TTL 不可得
+   */
+  public record CacheValueWithTtl(Object value, long remainingTtl) {
   }
 
   /**
