@@ -43,7 +43,7 @@ build/
 .codegraph/
 
 ### Docs ###
-docs/
+# 只忽略本地工具目录 docs/superpowers/，仓库文档 docs/*.md 需要纳入版本控制
 docs/superpowers/
 
 ### Local review notes ###

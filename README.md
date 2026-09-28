@@ -1,42 +1,44 @@
 # Bing Cache
 
-基于 Spring AOP 的方法级缓存组件，通过注解实现透明的数据缓存，支持 L1 本地缓存（Caffeine）和 L2 分布式缓存（Redis）两级架构。
+[English](README.md) | [中文](README_CN.md)
 
-## 特性
+A method-level cache component built on Spring AOP. Transparent caching through annotations, with a two-level architecture: L1 local cache (Caffeine) and L2 distributed cache (Redis).
 
-- **注解驱动**：`@BingCache` 缓存读取、`@BingCacheEvict` 缓存清除（支持 `@Repeatable` 多缓存协同失效），零侵入业务代码
-- **两级缓存**：L1(Caffeine) + L2(Redis) 组合，L1 未命中自动回填并携带 L2 剩余 TTL
-- **跨实例失效**：基于 Redis Pub/Sub 广播缓存失效消息，多实例部署时 L1 缓存自动同步
-- **版本对账**：定时检查 Redis 版本号变化，补偿 Pub/Sub 消息丢失，确保最终一致性
-- **自动降级**：Redis 不可用时自动回退纯 L1 本地缓存模式，恢复后按对账配置处理 L1 脏数据
-- **L1 存活限制**：`l1-max-ttl` 限制 L1 条目最大存活时间，作为 Pub/Sub 丢失的兜底保障
-- **null 值防穿透**：`cacheNullValue` 属性支持缓存 null 结果，防止缓存穿透
-- **L1 前缀限容**：`maxSize` 属性按前缀独立控制 Caffeine 容量，默认 5000，避免高基数方法的条目挤满全局池子驱逐其他热点缓存
-- **SpEL Key 表达式**：`argSpel` 属性支持 SpEL 表达式从参数中选取值生成 key（如 `#user.id`），支持类似 Spring `@Cacheable` 的参数变量
-- **确定性 Key**：基于 Jackson 序列化生成 key，不依赖 `toString()`，重启后保持一致
-- **自动装配**：Spring Boot Starter 一键引入，根据 classpath 和配置自动选择缓存模式
+> **Implementation details** (cache key format, reconciliation, degradation and recovery internals) live in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — Chinese only for now.
 
-## ⚠️ 一致性须知（使用前必读）
+## Features
 
-Bing Cache 采用 **最终一致性** 模型，不同失效操作的一致性强度不同，使用前务必了解：
+- **Annotation-driven**: `@BingCache` for caching reads, `@BingCacheEvict` for invalidation (repeatable, so one write can invalidate several caches) — zero intrusion into business code
+- **Two-level cache**: L1 (Caffeine) + L2 (Redis); an L1 miss is backfilled from L2 together with the L2 entry's remaining TTL
+- **Cross-instance invalidation**: cache invalidation is broadcast over Redis Pub/Sub, so L1 stays in sync across instances
+- **Version reconciliation**: a periodic check of Redis version numbers compensates for lost Pub/Sub messages, providing eventual consistency
+- **Automatic degradation**: falls back to L1-only mode when Redis is unavailable, and reconciles L1 dirty data on recovery
+- **L1 entry cap**: `l1-max-ttl` bounds how long an L1 entry can live — the backstop when Pub/Sub messages are lost
+- **Null-value protection**: `cacheNullValue` caches null results to prevent cache penetration
+- **Per-prefix L1 sizing**: `maxSize` caps Caffeine capacity independently per prefix (default 5000), so a high-cardinality method cannot evict everyone else's hot entries
+- **SpEL key expressions**: `argSpel` selects values from arguments to build the key (e.g. `#user.id`), using the same argument variables as Spring's `@Cacheable`
+- **Deterministic keys**: built from Jackson serialization rather than `toString()`, so keys survive JVM restarts
+- **Auto-configuration**: a Spring Boot starter; the cache mode is selected from the classpath and configuration
 
-| 失效操作 | 跨实例一致性保障 | Pub/Sub 丢失时的兜底 |
+## ⚠️ Consistency Model (read this first)
+
+Bing Cache is **eventually consistent**, and different invalidation operations have different consistency strengths:
+
+| Invalidation operation | Cross-instance guarantee | Backstop when Pub/Sub is lost |
 |---|---|---|
-| `clear()` / `clearByPrefix()` / `clearByGroup()`（`allEntries=true`） | Pub/Sub + 版本对账（双重） | 版本对账在下一对账周期补偿 ✅ |
-| **单 key `evict()`（`allEntries=false`）** | **仅 Pub/Sub（单层）** | **无对账补偿，仅靠 `l1-max-ttl` 自然过期** ⚠️ |
+| `clear()` / `clearByPrefix()` / `clearByGroup()` (`allEntries=true`) | Pub/Sub **+** version reconciliation (two layers) | Reconciliation compensates on the next cycle ✅ |
+| **Single-key `evict()` (`allEntries=false`)** | **Pub/Sub only (one layer)** | **No reconciliation — relies purely on `l1-max-ttl` expiry** ⚠️ |
 
-**关键限制**：单 key `evict` 不递增版本号（避免产生与业务 key 等量的版本键导致 Redis 膨胀），因此其跨实例失效**完全依赖 Pub/Sub 实时送达**。若发生网络分区导致 Pub/Sub 持续丢失，被 evict 的脏数据会在其他实例 L1 中驻留最长 `l1-max-ttl`（L1+L2 模式默认 300 秒）。
+**Key limitation**: a single-key `evict` does not increment any version counter (that would create one version key per business key and bloat Redis), so its cross-instance invalidation **depends entirely on the Pub/Sub message arriving**. If a network partition causes Pub/Sub messages to be lost, the evicted stale value stays in other instances' L1 for at most `l1-max-ttl` (300 seconds by default in L1+L2 mode).
 
-**实践建议**：
-- 对一致性要求高的单 key 更新场景（如"更新用户手机号"），将 `l1-max-ttl` 调到可接受的脏数据窗口（如 60-120 秒）。
-- 若 300 秒脏数据窗口不可接受，考虑用 `allEntries=true` 批量清除（走版本对账，一致性更强但清除范围更大）。
-- 单 key evict 的详细机制见 [版本对账机制 - 对账范围限制](#版本对账机制)。
+**Recommendations**:
+- For single-key updates that demand strong consistency (e.g. "update a user's phone number"), lower `l1-max-ttl` to a dirty-data window you can accept (e.g. 60–120 seconds).
+- If a 300-second window is unacceptable, use `allEntries=true` bulk clearing instead — it goes through version reconciliation, which is stronger but clears a wider range.
+- The full mechanism is described in [reconciliation scope limits](docs/ARCHITECTURE.md#对账范围限制重要).
 
-## 快速开始
+## Quick Start
 
-### 1. 引入依赖
-
-在项目的 `pom.xml` 中添加：
+### 1. Add the dependency
 
 ```xml
 <dependency>
@@ -46,27 +48,27 @@ Bing Cache 采用 **最终一致性** 模型，不同失效操作的一致性强
 </dependency>
 ```
 
-组件通过 `AutoConfiguration.imports` 自动装配，无需手动配置。
+The component is wired through `AutoConfiguration.imports`; no manual configuration is required.
 
-### 2. 使用缓存注解
+### 2. Use the annotations
 
 ```java
 @Service
 public class DictService {
 
-  // 缓存查询结果，1 小时过期
+  // Cache the query result for 1 hour
   @BingCache(cacheName = "dict", expireTime = 3600)
   public List<DictVO> getDictList(String dictType) {
     return dictMapper.selectByType(dictType);
   }
 
-  // 使用 SpEL 表达式从对象中取字段作为 key
+  // Use a SpEL expression to pick a field from an object for the key
   @BingCache(cacheName = "user", argSpel = "#user.id")
   public UserVO getUser(UserVO user) {
     return userMapper.selectById(user.getId());
   }
 
-  // 更新数据后清除缓存
+  // Invalidate the cache after an update
   @BingCacheEvict(cacheName = "dict", argIndexes = {0})
   public void updateDict(String dictType, DictVO vo) {
     dictMapper.update(vo);
@@ -74,601 +76,457 @@ public class DictService {
 }
 ```
 
-## 注解详解
+## Annotation Reference
 
-### @BingCache — 缓存读取
+### @BingCache — cache a read
 
-标注在查询方法上，方法首次执行后缓存结果，后续调用直接返回缓存值。
+Put it on a query method. The result is cached after the first execution; later calls return the cached value.
 
-| 属性 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `group` | String | `""` | 缓存分组，用于将多个 cacheName 归类到同一命名空间，支持按 group 批量清除（`@BingCacheEvict(group=..., allEntries=true)`）。设置后 key 格式为 `group:cacheName(args)` |
-| `cacheName` | String | `""` | 缓存名称，用于与 `@BingCacheEvict` 共享同一前缀，优先级最高 |
-| `keyPrefix` | String | `""` | 缓存 key 前缀，为空时使用"类全限定名.方法名(参数类型签名)"；`cacheName` 不为空时忽略 |
-| `expireTime` | int | `0` | 过期时间（秒），`0` 表示不过期 |
-| `argIndexes` | int[] | `{}` | 参与 key 生成的参数索引，空数组表示全部参数参与；`argSpel` 非空时忽略 |
-| `argSpel` | String | `""` | SpEL 表达式，从参数中选取值参与 key 生成（如 `#user.id`）；非空时优先于 `argIndexes` |
-| `cacheNullValue` | boolean | `false` | 是否缓存 null 结果，设为 `true` 可防止缓存穿透 |
-| `maxSize` | long | `5000` | L1 最大条目数（按前缀）。默认 5000，每个注解拥有独立 Caffeine 实例；设为 `0` 则使用全局共享缓存。仅限制 L1 本地容量，L2 Redis 不受此限制 |
+| Attribute | Type | Default | Description |
+|---|---|---|---|
+| `group` | String | `""` | Cache group. Places several cache names in one namespace and enables bulk group clearing (`@BingCacheEvict(group=..., allEntries=true)`). When set, the key format is `group:cacheName(args)` |
+| `cacheName` | String | `""` | Cache name. Shares a prefix with `@BingCacheEvict`; highest priority |
+| `keyPrefix` | String | `""` | Cache key prefix. When empty, `fully.qualified.ClassName.methodName(paramTypes)` is used. Ignored when `cacheName` is set |
+| `expireTime` | int | `0` | Expiry in seconds; `0` means no expiry |
+| `argIndexes` | int[] | `{}` | Argument indexes that take part in key generation. An empty array means all arguments participate. Ignored when `argSpel` is set |
+| `argSpel` | String | `""` | SpEL expression selecting values from arguments for key generation (e.g. `#user.id`). Takes priority over `argIndexes` |
+| `cacheNullValue` | boolean | `false` | Cache null results. Set `true` to prevent cache penetration |
+| `maxSize` | long | `5000` | Max L1 entry count **per prefix**. Each annotation owns a separate Caffeine instance; `0` uses the shared global cache. Limits L1 only — L2 (Redis) is unbounded |
 
-> **`maxSize` 按前缀生效**：同一 `cacheName` / `keyPrefix` 被多个 `@BingCache` 引用时，容量以**首次写入时**声明的 `maxSize` 为准（懒创建后即固定），后续不同值会被忽略。建议同一前缀始终使用相同的 `maxSize`。
+> **`maxSize` takes effect per prefix**: when the same `cacheName` / `keyPrefix` is referenced by several `@BingCache` annotations, the effective capacity is the `maxSize` declared on the **first write** (the instance is created lazily and then fixed); later differing values are ignored. Use the same `maxSize` for a given prefix.
 
-#### cacheName 与 keyPrefix 怎么选？
+#### cacheName vs keyPrefix?
 
-两者功能上都能自定义缓存 key 前缀，区别在于**语义和使用场景**：
+Both customize the key prefix; they differ in **semantics and use case**:
 
 | | cacheName | keyPrefix |
 |---|---|---|
-| **语义** | "我的缓存叫什么名字" | "我的 key 前缀长什么样" |
-| **适用场景** | 需要 `@BingCacheEvict` 配对清除的缓存 | 只需自定义前缀、不需要配对清除的缓存 |
-| **配对清除** | `@BingCacheEvict(cacheName = "user")` 天然配对 | 也能配对，但语义不明确 |
-| **优先级** | 高（cacheName 不为空时 keyPrefix 被忽略） | 低 |
+| **Semantics** | "what my cache is called" | "what my key prefix looks like" |
+| **Use case** | Caches that must be invalidated by a paired `@BingCacheEvict` | Caches that only need a custom prefix, with no paired invalidation |
+| **Paired invalidation** | `@BingCacheEvict(cacheName = "user")` pairs naturally | Possible, but semantically fuzzy |
+| **Priority** | High (when set, `keyPrefix` is ignored) | Low |
 
-**简单原则：**
-- **需要缓存清除**（读 + 写/删配对）→ 用 `cacheName`
-- **只需要缓存、不需要清除** → 用 `keyPrefix` 缩短前缀，或不设置用默认前缀
+**Rule of thumb**:
+- **Need invalidation** (a read paired with a write/delete) → use `cacheName`
+- **Cache only, no invalidation** → use `keyPrefix` to shorten the prefix, or set nothing and accept the default
 
-> 注意：`cacheName` 和 `keyPrefix` 同时设置时，只有 `cacheName` 生效。
+> Note: when both `cacheName` and `keyPrefix` are set, only `cacheName` takes effect.
 
-#### cacheName 命名约束
+#### cacheName naming constraints
 
-**`cacheName` 禁止含 `(` 或 `)`**：这两个字符是 key 生成中参数部分的定界符，cacheName 含此字符会破坏 `clearByPrefix` 边界匹配和 Caffeine 按前缀限容（`maxSize`）的路由。设置时直接抛 `IllegalArgumentException`。建议使用字母、数字、下划线、连字符命名（如 `userDetail`、`userList`）。
+**`cacheName` must not contain `(` or `)`**: these characters delimit the argument part of a generated key. A cache name containing them breaks `clearByPrefix` boundary matching and the routing used for per-prefix `maxSize`. Setting one throws `IllegalArgumentException`. Prefer letters, digits, underscores and hyphens (e.g. `userDetail`, `userList`).
 
-**不推荐 `cacheName` 含冒号（`:`）**：`@BingCache` / `@BingCacheEvict` 的 `group` 分组属性使用冒号作为 group 与 cacheName 的层级分隔符，缓存 key 格式为 `group:cacheName(args)`。若 `cacheName` 本身含冒号（如 `cacheName = "user:detail"`），其 key 前缀会与 `group = "user"` + `cacheName = "detail"` 产生的前缀完全相同。此时执行 `@BingCacheEvict(group = "user", allEntries = true)` 触发的 `clearByGroup("user")` 会按 `user:` 前缀匹配清除，**误清那些并未声明属于 `user` 组、只是 cacheName 恰好含冒号的缓存**。含冒号不会抛异常，仅发出 WARN 提示。
+**A colon (`:`) in `cacheName` is discouraged**: `group` uses `:` as the separator between group and cache name, and the key format is `group:cacheName(args)`. A `cacheName` that itself contains a colon (e.g. `cacheName = "user:detail"`) produces **exactly the same** prefix as `group = "user"` + `cacheName = "detail"`. Then `@BingCacheEvict(group = "user", allEntries = true)` triggers `clearByGroup("user")`, which matches on the `user:` prefix and **clears caches that never declared membership in the `user` group** — they merely happened to use a colon. A colon does not throw; a WARN is logged.
 
-> **`keyPrefix` 不做字符校验**：`keyPrefix` 是字面匹配串，需要支持匹配默认前缀（默认前缀格式为 `className.methodName(paramTypes)`，本身含 `(`），因此允许含 `(` / `)` / `:` 等字符。但含冒号存在与 cacheName 同样的 group 碰撞风险，使用 group 时同样应避免。
+> **`keyPrefix` is not character-validated**: it is a literal match string and must be able to express a default prefix (whose form is `className.methodName(paramTypes)` and therefore contains `(`), so `(`, `)` and `:` are all allowed. It carries the same group-collision risk from a colon, so avoid colons there too when using `group`.
 
-同理，`group` 本身也不应含冒号。若存在 `group="foo"` 与 `group="foo:bar"` 两个分组，`clearByGroup("foo")` 按 `foo:` 前缀匹配时会误清 `foo:bar:` 下的条目。建议 `group` 使用单词或驼峰命名（如 `user`、`orderDetail`）。
+The same applies to `group` itself: it should not contain a colon. If both `group="foo"` and `group="foo:bar"` exist, `clearByGroup("foo")` matches the `foo:` prefix and will wrongly clear entries under `foo:bar:`. Prefer single words or camel case for `group` (e.g. `user`, `orderDetail`).
 
-若需要"分组"语义，使用 `group` 属性而非在 `cacheName` 中拼接冒号。
+If you want grouping semantics, use the `group` attribute rather than concatenating colons into `cacheName`.
 
-#### argSpel SpEL 表达式
+#### argSpel (SpEL expressions)
 
-`argSpel` 接受 SpEL 表达式，从方法参数中选取值参与 key 生成。表达式中可用的变量（类似 Spring `@Cacheable` 的参数变量）：
+`argSpel` accepts a SpEL expression that selects values from the method arguments to build the key. Available variables mirror Spring's `@Cacheable` argument variables:
 
-| 变量 | 说明 | 示例 |
-|------|------|------|
-| `#参数名` | 按名称引用方法参数 | `#id`、`#user.id` |
-| `#p0` / `#a0` | 按索引引用方法参数（从 0 开始） | `#p0` |
-| `#root.method` | 当前方法（`Method` 对象） | `#root.method.name` |
-| `#root.methodName` | 方法名 | `#root.methodName` |
-| `#root.args` | 参数数组 | `#root.args[0]` |
-| `#root.target` | 目标对象 | `#root.target.getClass()` |
+| Variable | Description | Example |
+|---|---|---|
+| `#argName` | Reference a method argument by name | `#id`, `#user.id` |
+| `#p0` / `#a0` | Reference a method argument by index (0-based) | `#p0` |
+| `#root.method` | The current `Method` object | `#root.method.name` |
+| `#root.methodName` | Method name | `#root.methodName` |
+| `#root.args` | Argument array | `#root.args[0]` |
+| `#root.target` | Target object | `#root.target.getClass()` |
 
-> 注意：不支持 `#root.targetClass`、`#caches` 等 Spring Cache 特有变量。
+> Note: Spring Cache-specific variables such as `#root.targetClass` and `#caches` are not supported.
 
-**单值与多值**：
+**Single value vs multiple values**:
 
-- **单值**：普通表达式、拼接表达式或单元素花括号表达式，输出 `Sg[...]`。
+- **Single value** — a plain expression, a concatenation, or a single-element brace expression. Rendered as `Sg[...]`.
   - `#user.id` → `Sg[N:1]`
   - `#userId + ':' + #type` → `Sg[S:1:normal]`
-  - `{#list}` → 去壳为 `#list`，等价于单值 → `Sg[[N:1, N:2]]`
-- **多值**：使用 SpEL 列表字面量 `{expr1, expr2, ...}`，顶层逗号分隔，嵌套 `()`/`[]`/`{}` 和字符串里的逗号被忽略，输出 `[...]`。
+  - `{#list}` → the braces are stripped, treated as single value → `Sg[[N:1, N:2]]`
+- **Multiple values** — use a SpEL list literal `{expr1, expr2, ...}`. Top-level commas separate values; commas inside nested `()` / `[]` / `{}` and inside string literals are ignored. Rendered as `[...]`.
   - `{#a, #b}` → `[N:1, N:2]`
-  - `{new int[]{#a, #b}, #c}` → `[[N:1, N:2], N:3]`（两个顶层参数，数组内逗号不影响切分）
+  - `{new int[]{#a, #b}, #c}` → `[[N:1, N:2], N:3]` (two top-level values; commas inside the array do not split)
 
-SpEL 表达式求值结果通过 Jackson 序列化为字符串（非基本类型时），null 结果序列化为 `"null"`。
+The SpEL result is serialized to a string via Jackson (for non-primitive types); a null result serializes to `"null"`.
 
-最终 key 格式为 `前缀(spelResult)`，前缀仍由 `cacheName` / `keyPrefix` 决定。
+The final key format is `prefix(spelResult)`, where the prefix still comes from `cacheName` / `keyPrefix`.
 
-#### null 值处理
+#### Null value handling
 
-**默认行为（不缓存 null）**：`cacheNullValue = false`，方法返回 null 时不缓存，每次调用都会重新执行方法。
+**Default (nulls are not cached)**: with `cacheNullValue = false`, a null return value is not cached and the method runs again on every call.
 
-**缓存 null（防缓存穿透）**：设置 `cacheNullValue = true` 可以缓存 null 结果，防止大量请求查询不存在的数据时穿透到数据库。
+**Caching null (anti-penetration)**: set `cacheNullValue = true` to cache null results and prevent a flood of lookups for non-existent data from reaching the database.
 
-> 内部使用 `BingCacheNullValue.INSTANCE` 占位符存储，因为 Caffeine 不支持缓存 null 值。读取时自动还原为 null 返回给调用方。NullValue 只存 L1 不存 L2（Jackson 无法反序列化包私有类）。
+> Internally a `BingCacheNullValue.INSTANCE` placeholder is used, because Caffeine cannot store null. On read it is transparently turned back into null for the caller. The null placeholder is stored in L1 only, never in L2 (Jackson cannot deserialize a package-private class).
 >
-> **⚠️ 跨实例限制**：由于 NullValue 不写入 L2（Redis），`cacheNullValue = true` 只能在**本实例**缓存 null 结果防穿透。多实例部署下，**每个实例对同一个不存在的 id 会各自回源一次**，之后该实例即命中本地 L1，不会持续穿透（除非 L1 条目过期或被 LRU 驱逐后重新回源一次）。也就是说 N 个实例对同一个不存在的 id 总共回源 N 次（而非 1 次），之后各实例稳定命中 L1。
+> **⚠️ Cross-instance limitation**: because the null placeholder is not written to L2 (Redis), `cacheNullValue = true` prevents penetration **only on the instance that cached it**. In a multi-instance deployment, **each instance falls back to the source once per non-existent id**; after that, the instance hits its own L1 and stops penetrating (unless the L1 entry expires or is evicted by LRU, in which case it falls back once more). In other words, N instances produce N source lookups in total for the same non-existent id rather than 1, after which each instance reliably hits L1.
 >
-> 如果希望跨实例共享 null 缓存（每个 id 全集群只回源一次），建议：
-> - 在业务层用布隆过滤器拦截不存在的 id
-> - 或显式缓存一个"空对象"占位符（如空 `UserVO`，public 类可被 Jackson 序列化写入 L2），而非依赖 null 缓存
+> To share the null cache across instances (one source lookup per id for the whole cluster), prefer:
+> - filtering non-existent ids with a Bloom filter in the business layer, or
+> - explicitly caching an "empty object" placeholder (e.g. an empty `UserVO`; a public class can be serialized by Jackson and written to L2) instead of relying on null caching
 >
-> 注意：上述限制针对的是**正常业务场景**（少量不存在的 id 被反复查询）。若面临**恶意穿透攻击**（海量不同 id 各查一次），L1 的 `max-size` 容量限制会导致 NullValue 来不及生效，此时必须用布隆过滤器在入口拦截，无论单实例还是多实例、是否写 L2 都无法仅靠缓存解决。
+> Note: this limitation concerns **ordinary traffic** (a small number of repeatedly queried non-existent ids). Against a **cache penetration attack** (a flood of distinct ids, each queried once), L1's `max-size` bound means the null placeholder never gets a chance to work — you must block ids at the entry point with a Bloom filter. No cache-layer setting can solve this, single- or multi-instance, with or without L2.
 
-> **null 值的 TTL 兜底**：null 值表示"数据**当前**不存在"，是一个会过时的临时判定（DB 随时可写使其变为"存在"）。因此当 `cacheNullValue = true` 且 `expireTime <= 0`（永不过期）时，组件不会让 null 占位符永久驻留 L1，而是自动套用 **300 秒**的兜底 TTL，并输出一次 WARN 日志提醒。这避免了"DB 后续插入数据后，本实例因永久缓存的 null 而持续脏读"的问题。此兜底在纯 L1 和 L1+L2 两种模式下均生效；建议为 `cacheNullValue = true` 的方法显式设置一个合理的正数 `expireTime`（如 60 秒），而非依赖兜底值。
+> **TTL backstop for null values**: a null value means "the data is **currently** absent", which is a temporary judgement that goes stale (the row can be inserted at any moment). So when `cacheNullValue = true` and `expireTime <= 0` (no expiry), the component does not let the null placeholder live in L1 forever: it applies a **300-second** fallback TTL and logs a single WARN. This prevents "the row is inserted later, but this instance keeps reading null forever because it cached the absence permanently". The backstop applies in both L1-only and L1+L2 mode. Prefer setting an explicit positive `expireTime` (e.g. 60 seconds) for `cacheNullValue = true` methods rather than relying on the fallback.
 
-#### 使用示例
+#### Examples
 
 ```java
-// ========== cacheName 场景：需要配对清除 ==========
+// ========== cacheName: needs paired invalidation ==========
 
-// 查询 — 缓存结果
+// Read — cache the result
 @BingCache(cacheName = "user", expireTime = 300)
 public UserVO getUserById(Long id) { ... }
 // key: user(Sg[N:1])
 
-// 更新 — 清除对应缓存（cacheName 相同且参数部分一致即可匹配）
+// Update — invalidate the matching entry (same cacheName and matching argument part)
 @BingCacheEvict(cacheName = "user", argIndexes = {0})
 public void updateUser(Long id, UserVO vo) { ... }
-// evict key: user(Sg[N:1]) ✓ 匹配
+// evict key: user(Sg[N:1]) ✓ matches
 
-// ========== keyPrefix 场景：只缓存不清除 ==========
+// ========== keyPrefix: cache only, no invalidation ==========
 
-// 默认前缀太长（com.example.DictService.getDictList），缩短一下
+// The default prefix is too long (com.example.DictService.getDictList) — shorten it
 @BingCache(keyPrefix = "dict", expireTime = 3600)
 public List<DictVO> getDictList(String dictType) { ... }
 // key: dict(Sg[S:sys_config])
 
-// 不过期的静态数据，只需缓存，不需要清除
+// Static data that never expires: cache it, never invalidate it
 @BingCache(keyPrefix = "configSys")
 public SystemConfigVO getSystemConfig() { ... }
 
-// ========== 其他用法 ==========
+// ========== Other usages ==========
 
-// 基础用法 — 不设置前缀，key 前缀为类名.方法名
+// Basic — no prefix, so the key prefix is ClassName.methodName
 @BingCache(expireTime = 3600)
 public List<DictVO> getDictList(String dictType) { ... }
 
-// 缓存 null 结果，防止缓存穿透
+// Cache a null result to prevent cache penetration
 @BingCache(cacheName = "user", expireTime = 60, cacheNullValue = true)
 public UserVO getUserById(Long id) { ... }
 
-// 限制 L1 缓存容量，避免高基数查询挤满全局池子（如分页查询）
+// Bound L1 capacity so high-cardinality queries (e.g. pagination) cannot fill the pool
 @BingCache(cacheName = "userList", expireTime = 120, maxSize = 100)
 public List<UserVO> queryUsers(String category, int page) { ... }
 
-// 不限制容量（0 使用全局共享缓存），适合字典等条目数固定的场景
+// No capacity bound (0 uses the shared global cache) — suits fixed-cardinality data like dictionaries
 @BingCache(cacheName = "dict", expireTime = 3600, maxSize = 0)
 public List<DictVO> getDictList(String dictType) { ... }
 
-// ========== argSpel 场景：SpEL 表达式选取参数 ==========
+// ========== argSpel: select arguments with a SpEL expression ==========
 
-// 从对象中取字段作为 key（只用 id，不用整个对象）
+// Pick a field from an object for the key (just the id, not the whole object)
 @BingCache(cacheName = "user", argSpel = "#user.id", expireTime = 300)
 public UserVO getUser(UserVO user) { ... }
 // key: user(Sg[N:1])
 
-// 多参数拼接
+// Concatenate several arguments
 @BingCache(cacheName = "order", argSpel = "#userId + ':' + #type")
 public Order getOrder(Long userId, String type) { ... }
 // key: order(Sg[S:1:normal])
 
-// 按索引引用参数（#p0 = 第一个参数，#a0 同义）
+// Reference an argument by index (#p0 = first argument, #a0 is a synonym)
 @BingCache(cacheName = "user", argSpel = "#p0")
 public UserVO getUserById(Long id) { ... }
 // key: user(Sg[N:1])
 
-// 访问对象方法
+// Call a method on an object
 @BingCache(cacheName = "user", argSpel = "#user.getName().toLowerCase()")
 public UserVO getUser(UserVO user) { ... }
 // key: user(Sg[S:alice])
 
-// 多值选取：方法前两个参数都参与 key 生成
+// Multiple values: both of the first two arguments take part in the key
 @BingCache(cacheName = "order", argSpel = "{#userId, #type}")
 public Order getOrder(Long userId, String type) { ... }
 // key: order([N:1, S:normal])
 ```
 
-### @BingCacheEvict — 缓存清除
+### @BingCacheEvict — invalidate
 
-标注在更新/删除方法上，方法执行后（或执行前）自动清除对应的缓存条目。支持在同一方法上重复使用（`@Repeatable`），用于一个写操作需要清除多个缓存的场景。
+Put it on an update/delete method. Matching entries are cleared after (or before) the method runs. The annotation is `@Repeatable`, so one write can invalidate several caches at once.
 
-| 属性 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `group` | String | `""` | 缓存分组，需与 `@BingCache` 的 `group` 一致才能匹配。`allEntries=true` 且仅设置 `group`（无 cacheName/keyPrefix）时，清除整个 group 下的缓存 |
-| `cacheName` | String | `""` | 缓存名称，需与 `@BingCache` 的 `cacheName` 一致才能匹配 |
-| `keyPrefix` | String | `""` | 缓存 key 前缀，同 `@BingCache`；`cacheName` 不为空时忽略 |
-| `argIndexes` | int[] | `{}` | 参与 key 生成的参数索引，需与 `@BingCache` 的 `argIndexes` 对应；`argSpel` 非空时忽略 |
-| `argSpel` | String | `""` | SpEL 表达式，需与 `@BingCache` 的 `argSpel` 一致才能匹配；非空时优先于 `argIndexes`；`allEntries=true` 时不生效 |
-| `allEntries` | boolean | `false` | `true` 时清除所有缓存：仅 `group` 时清整个 group；有 `cacheName`/`keyPrefix` 时清该前缀；都没有时清空全部 |
-| `beforeInvocation` | boolean | `false` | `true` 时在方法执行前清除缓存；默认方法成功后才清除。**⚠️ 方法失败时缓存已被清，数据未变更，后续请求回源，可能引发击穿/雪崩，事务方法上慎用** |
+| Attribute | Type | Default | Description |
+|---|---|---|---|
+| `group` | String | `""` | Cache group. Must match `@BingCache`'s `group` to line up. With `allEntries=true` and only `group` set (no cacheName/keyPrefix), the whole group is cleared |
+| `cacheName` | String | `""` | Cache name. Must match `@BingCache`'s `cacheName` to line up |
+| `keyPrefix` | String | `""` | Cache key prefix, same as `@BingCache`; ignored when `cacheName` is set |
+| `argIndexes` | int[] | `{}` | Argument indexes for key generation. Must correspond to `@BingCache`'s `argIndexes`. Ignored when `argSpel` is set |
+| `argSpel` | String | `""` | SpEL expression. Must be identical to `@BingCache`'s `argSpel` to line up. Takes priority over `argIndexes`. Not used when `allEntries=true` |
+| `allEntries` | boolean | `false` | `true` clears whole namespaces: only `group` → clear that group; `cacheName`/`keyPrefix` → clear that prefix; neither → clear everything |
+| `beforeInvocation` | boolean | `false` | `true` clears before the method runs. By default the cache is cleared only after the method succeeds. **⚠️ On failure the cache is already empty while the data is unchanged, so subsequent requests fall through to the source — this can trigger a stampede/avalanche. Use with care on transactional methods** |
 
-> **cacheName 与 keyPrefix 选择原则同 `@BingCache`**：推荐用 `cacheName` 配对，语义更明确。`cacheName` 不为空时 `keyPrefix` 被忽略。
+> **Choose `cacheName` over `keyPrefix` here too**: pairing on `cacheName` is semantically clearer. When `cacheName` is set, `keyPrefix` is ignored.
 
-#### 使用示例
+#### Examples
 
-下面所有清除方法都配对同一个查询方法，其 key 为基准：
+All the invalidation methods below pair with one query method whose key is the reference:
 
 ```java
-// 查询 — 基准 key: userDetail(Sg[N:1])
+// Read — reference key: userDetail(Sg[N:1])
 @BingCache(cacheName = "userDetail", expireTime = 300)
 public UserVO getUserById(Long id) { ... }
 ```
 
-各 `@BingCacheEvict` 用法及生成的 key（注意 key 必须与查询方法匹配，否则清不到）：
+Each `@BingCacheEvict` usage and the key it generates (the key must match the query method, otherwise nothing is cleared):
 
 ```java
-// 单参数：默认用全部参数生成 key → userDetail(Sg[N:1]) ✓ 匹配
+// Single argument: all arguments are used by default → userDetail(Sg[N:1]) ✓ matches
 @BingCacheEvict(cacheName = "userDetail")
 public void deleteById(Long id) { ... }
 
-// 多参数：用 argIndexes 只取 id 生成 key → userDetail(Sg[N:1]) ✓ 匹配
-//        （不加 argIndexes 时两参数都会参与，key 变成 [N:1, {...}] 不匹配）
+// Multiple arguments: use argIndexes to take just the id → userDetail(Sg[N:1]) ✓ matches
+//        (without argIndexes both arguments participate, the key becomes [N:1, {...}] and does not match)
 @BingCacheEvict(cacheName = "userDetail", argIndexes = {0})
 public void updateUser(Long id, UserVO vo) { ... }
 
-// 使用 argSpel 取 id 生成 key → userDetail(Sg[N:1]) ✓ 匹配
-// （表达式需与 @BingCache 的 argSpel 完全一致）
+// Use argSpel to take the id → userDetail(Sg[N:1]) ✓ matches
+// (the expression must be identical to @BingCache's argSpel)
 @BingCacheEvict(cacheName = "userDetail", argSpel = "#vo.id")
 public void deleteUser(UserVO vo) { ... }
 
-// 方法执行前清除缓存（即使方法抛异常，缓存也会被清除）
-// ⚠️ 注意：若方法失败（异常/事务回滚），数据未变更但缓存已空，后续请求会回源，
-//    可能引发击穿/雪崩。仅用于"即使失败也确需清缓存"的场景，事务方法上慎用。
+// Clear before the method runs (the cache is cleared even if the method throws)
+// ⚠️ If the method fails (exception / transaction rollback) the data is unchanged but the cache is
+//    empty, so subsequent requests fall through to the source and may trigger a stampede/avalanche.
+//    Use only where "clear even on failure" is genuinely required; be careful on transactional methods.
 @BingCacheEvict(cacheName = "userDetail", argIndexes = {0}, beforeInvocation = true)
 public void forceUpdateUser(Long id, UserVO vo) { ... }
 
-// 清空指定 cacheName 下的所有缓存（忽略参数，清整个 userDetail 前缀）
+// Clear every entry under the cache name (arguments ignored, whole userDetail prefix)
 @BingCacheEvict(cacheName = "userDetail", allEntries = true)
 public void refreshAllUsers() { ... }
 
-// 清空全部缓存（不指定 cacheName/keyPrefix）
+// Clear everything (no cacheName/keyPrefix)
 @BingCacheEvict(allEntries = true)
 public void clearAllCache() { ... }
 ```
 
-> **关键**：`argIndexes` / `argSpel` 决定 evict 的 key 是否与查询 key 匹配，与 `@BingCache` 必须对应。`allEntries=true` 时不按参数清，而是清整个前缀，参数配置被忽略。
+> **Critical**: `argIndexes` / `argSpel` decide whether the evict key matches the query key, and must correspond to `@BingCache`. With `allEntries=true` arguments are ignored and the whole prefix is cleared.
 
-### 配对使用
+### Pairing read and write
 
-`cacheName` 是两个注解之间的桥梁，用来让读写注解共享同一个缓存前缀。
+`cacheName` is the bridge between the two annotations: it lets the read and write annotations share a cache prefix.
 
-**⚠️ 重要：参数部分也必须一致。** `cacheName` 相同只保证前缀一致，参数部分（`argIndexes` 或 `argSpel`）也必须对应，否则生成的 key 不匹配，evict 清不到缓存；不会自动降级为按 `cacheName` 批量清除。
+**⚠️ The argument part must match too.** A shared `cacheName` only guarantees the prefix matches; the argument part (`argIndexes` or `argSpel`) must correspond too, otherwise the generated keys differ, the eviction misses, and it does **not** silently degrade to a bulk clear by `cacheName`.
 
 ```java
 @Service
 public class UserService {
 
-  // 查询 — 缓存结果，key: user(Sg[N:1])
+  // Read — cache the result, key: user(Sg[N:1])
   @BingCache(cacheName = "user", expireTime = 300)
   public UserVO getUserById(Long id) {
     return userMapper.selectById(id);
   }
 
-  // 更新 — 清除缓存，argIndexes={0} 只用 id 生成 key → user(Sg[N:1]) ✓ 匹配
+  // Update — clear the cache; argIndexes={0} builds the key from the id alone → user(Sg[N:1]) ✓ matches
   @BingCacheEvict(cacheName = "user", argIndexes = {0})
   public void updateUser(Long id, UserVO vo) {
     userMapper.updateById(vo);
   }
 
-  // 删除 — 只有一个参数，不需要 argIndexes，key 自然匹配 → user(Sg[N:1]) ✓
+  // Delete — one argument only, no argIndexes needed, the key matches naturally → user(Sg[N:1]) ✓
   @BingCacheEvict(cacheName = "user")
   public void deleteUser(Long id) {
     userMapper.deleteById(id);
   }
 
-  // 批量刷新 — 只清空 user 缓存，不影响其他 cacheName 的缓存
+  // Bulk refresh — clears only the user cache, leaving other cache names alone
   @BingCacheEvict(cacheName = "user", allEntries = true)
   public void refreshAllUsers() {
-    // 批量操作后，所有 user 前缀的缓存统一失效，dict 等其他缓存不受影响
+    // After a bulk operation every user-prefixed entry is invalidated; dict and others are untouched
   }
 }
 ```
 
-> **注意**：查询方法如果使用了 `argIndexes` 或 `argSpel`，清除方法必须设置对应的值。
-> 例如查询方法 `@BingCache(cacheName = "user", argSpel = "#user.id")`，清除方法也应为 `@BingCacheEvict(cacheName = "user", argSpel = "#user.id")`。
+> **Note**: if the query method uses `argIndexes` or `argSpel`, the invalidation method must set the matching value.
+> For example, if the query is `@BingCache(cacheName = "user", argSpel = "#user.id")`, the invalidation should be `@BingCacheEvict(cacheName = "user", argSpel = "#user.id")`.
 
-#### 多缓存协同失效
+#### Invalidating several caches from one write
 
-当一个写操作影响多个缓存时，有两种方式协同清除：
+When one write affects several caches, there are two ways to coordinate the invalidation.
 
-**方式一：使用 `group` 分组（推荐）**
+**Option 1: group them (recommended)**
 
-将相关缓存归入同一 group，写操作用 `@BingCacheEvict(group=..., allEntries=true)` 按命名空间批量清除，无需逐个精确声明 cacheName 与参数：
+Put related caches in one group and let the write invalidate the whole namespace with `@BingCacheEvict(group=..., allEntries=true)`, without declaring every cache name and argument combination:
 
 ```java
 @Service
 public class UserService {
 
-  // 用户详情 — 缓存到 user 组的 detail
+  // User detail — cached under user/detail
   @BingCache(group = "user", cacheName = "detail", expireTime = 300)
   public UserVO getUserDetail(Long id) { ... }
   // key: user:detail(Sg[N:1])
 
-  // 用户列表 — 缓存到 user 组的 list
+  // User list — cached under user/list
   @BingCache(group = "user", cacheName = "list", argIndexes = {0, 1}, expireTime = 120)
   public List<UserVO> queryUsers(String category, int page) { ... }
   // key: user:list([S:admin, N:1])
 
-  // 用户统计 — 缓存到 user 组的 stats
+  // User statistics — cached under user/stats
   @BingCache(group = "user", cacheName = "stats", expireTime = 600)
   public UserStatsVO getUserStats() { ... }
   // key: user:stats()
 
-  // 用户订单 — 缓存到 user 组的 orders
+  // User orders — cached under user/orders
   @BingCache(group = "user", cacheName = "orders", expireTime = 120)
   public List<OrderVO> getUserOrders(Long userId) { ... }
   // key: user:orders(Sg[N:1])
 
-  // 更新用户 — 一个注解清除 user 组下所有缓存（detail/list/stats/orders 全清）
+  // Update a user — one annotation clears everything under the user group (detail/list/stats/orders)
   @BingCacheEvict(group = "user", allEntries = true)
   public void updateUser(Long id, UserVO vo) { ... }
-  // 清除范围：user:* 所有 key
+  // clears: every user:* key
 
-  // 新增订单 — 只清 user 组的 orders 缓存（不影响 detail/list/stats）
+  // Create an order — clears only user/orders, leaving detail/list/stats alone
   @BingCacheEvict(group = "user", cacheName = "orders", allEntries = true)
   public void createOrder(Long userId, String orderId) { ... }
-  // 清除范围：user:orders* 所有 key
+  // clears: every user:orders* key
 
-  // 刷新统计 — 只清 user 组的 stats 缓存
+  // Refresh statistics — clears only user/stats
   @BingCacheEvict(group = "user", cacheName = "stats", allEntries = true)
   public void refreshUserStats() { ... }
-  // 清除范围：user:stats* 所有 key
+  // clears: every user:stats* key
 }
 ```
 
-> **要点**：方式一全程用 `group + allEntries` 按"组 / cacheName"批量清除，不依赖 `argIndexes`/`argSpel` 精确匹配参数。这样即使查询方法的参数选取方式（`argIndexes`/`argSpel`）变化，清除注解也无需同步修改。若只需清单个 key（精确到某用户），见下面"方式二"的 `argIndexes` 用法。
+> **Why this helps**: option 1 relies on `group + allEntries` throughout, matching by "group / cache name" instead of depending on `argIndexes` / `argSpel` to match arguments exactly. Even if a query method later changes how it selects arguments, the invalidation annotations need no update. If you need to clear exactly one entry (one specific user), use the `argIndexes` form in option 2 below.
 
-**方式二：使用多个 `@BingCacheEvict`（不使用 group）**
+**Option 2: several `@BingCacheEvict` (no group)**
 
-未使用 group 时，需要逐个声明要清除的 cacheName：
+Without a group, name every cache to clear explicitly:
 
 ```java
 @Service
 public class UserService {
 
-  // 用户详情 — 按 id 缓存
+  // User detail — cached by id
   @BingCache(cacheName = "userDetail", expireTime = 300)
   public UserVO getUserDetail(Long id) { ... }
 
-  // 用户列表 — 按 category + page 缓存
+  // User list — cached by category + page
   @BingCache(cacheName = "userList", argIndexes = {0, 1}, expireTime = 120)
   public List<UserVO> queryUsers(String category, int page) { ... }
 
-  // 用户统计 — 独立缓存
+  // User statistics — independent cache
   @BingCache(cacheName = "userStats", expireTime = 600)
   public UserStatsVO getUserStats() { ... }
 
-  // 更新用户 — 需要清除所有相关缓存
-  @BingCacheEvict(cacheName = "userDetail", argIndexes = {0})  // 清除该用户的详情
-  @BingCacheEvict(cacheName = "userList", allEntries = true)    // 清除所有列表（无法确定哪些页包含该用户）
+  // Update a user — must clear every related cache
+  @BingCacheEvict(cacheName = "userDetail", argIndexes = {0})  // clear this user's detail
+  @BingCacheEvict(cacheName = "userList", allEntries = true)    // clear all lists (can't know which pages contain the user)
   public void updateUser(Long id, UserVO vo) { ... }
 
-  // 新增用户 — 只需清除列表，详情是新 key 无需清除
+  // Create a user — only the list needs clearing; a new detail key needs none
   @BingCacheEvict(cacheName = "userList", allEntries = true)
   public void createUser(UserVO vo) { ... }
 
-  // 修改用户统计相关字段 — 只清除统计缓存
+  // Change a statistics-related field — clear only the statistics cache
   @BingCacheEvict(cacheName = "userStats", allEntries = true)
   public void refreshUserStats() { ... }
 }
 ```
 
-> **设计原则**：`group` 适合"一个写操作需清除多个相关 cacheName"的场景，用一个注解替代 N 个 `@BingCacheEvict`；不使用 group 时，不同 cacheName 代表独立缓存空间，需显式声明要清除哪些。两种方式都遵循"既不遗漏也不误伤"的原则——`group` 通过命名空间隔离实现，多注解通过显式列举实现。
+> **Design principle**: `group` suits "one write must clear several related cache names", replacing N `@BingCacheEvict` annotations with one. Without a group, each cache name is an independent cache space and you must state which ones to clear. Both follow "neither miss nor over-delete" — `group` achieves it through namespace isolation, multiple annotations through explicit enumeration.
 
-#### group 清除层级
+#### Clearing granularity with `group`
 
-`group` 提供三层清除粒度：
+`group` provides three tiers of clearing granularity:
 
-| 场景 | 注解 | 行为 |
-|------|------|------|
-| 清除单个缓存 | `@BingCacheEvict(group="user", cacheName="detail", argIndexes={0})` | 清除 `user:detail(Sg[N:1])` |
-| 清除 cacheName 下所有缓存 | `@BingCacheEvict(group="user", cacheName="list", allEntries=true)` | 清除 `user:list(` 开头的所有 key |
-| 清除整个 group | `@BingCacheEvict(group="user", allEntries=true)` | 清除 `user:` 开头的所有 key（1 次 SCAN + 1 次 Pub/Sub） |
-| 清空全部缓存 | `@BingCacheEvict(allEntries=true)` | 清空全部缓存 |
+| Scenario | Annotation | Effect |
+|---|---|---|
+| Clear one entry | `@BingCacheEvict(group="user", cacheName="detail", argIndexes={0})` | clears `user:detail(Sg[N:1])` |
+| Clear everything under a cache name | `@BingCacheEvict(group="user", cacheName="list", allEntries=true)` | clears every key starting with `user:list(` |
+| Clear the whole group | `@BingCacheEvict(group="user", allEntries=true)` | clears every key starting with `user:` (1 SCAN + 1 Pub/Sub) |
+| Clear everything | `@BingCacheEvict(allEntries=true)` | clears all caches |
 
-> **`group` 单独使用限制**：`group` 不能单独用于非 `allEntries` 场景（即 `@BingCacheEvict(group="user")` 不带 `allEntries=true` 也不带 `cacheName`/`keyPrefix` 会抛 `IllegalStateException`），因为没有 `cacheName`/`keyPrefix` 无法生成合法的 key 前缀。
+> **`group` cannot stand alone outside `allEntries`**: `@BingCacheEvict(group="user")` without `allEntries=true` and without `cacheName`/`keyPrefix` throws `IllegalStateException`, because no valid key prefix can be derived.
 
-## 缓存 Key 生成规则
+## Cache Key Format
 
-格式：`前缀(参数部分)`
+Format: `prefix(arguments)`.
 
-### 前缀优先级
+**Prefix priority**: `cacheName` (highest) → `keyPrefix` → default `fully.qualified.ClassName.methodName(paramTypes)`. When `group` is set the key becomes `group:prefix(args)` (e.g. `user:detail(Sg[N:1])`); `group` is an outer namespace prefix and does not affect that priority.
 
-1. **`cacheName`**（最高）— 如 `user`
-2. **`keyPrefix`** — 如 `userDetail`
-3. **默认** — 类全限定名.方法名(参数类型签名)，如 `com.example.UserService.getUserById(java.lang.Long)`
+**Argument selection priority**: `argSpel` > `argIndexes` > all arguments.
 
-> **`group` 是可选的最外层前缀**：设置 `group` 时，key 格式为 `group:prefix(args)`（如 `user:detail(Sg[N:1])`）。`group` 不影响上述优先级，仅作为命名空间前缀拼接在最终 prefix 之前。
+| Argument type | Element encoding | Single-value example |
+|---|---|---|
+| null | `null` | `user(Sg[null])` |
+| Integer (`Integer` / `Long` / `BigInteger` …) | `N:` + value | `user(Sg[N:42])` |
+| String | `S:` + value | `user(Sg[S:42])` |
+| Boolean | `B:` + value | `user(Sg[B:true])` |
+| Character | `C:` + value | `user(Sg[C:x])` |
+| Decimal (`Double` / `Float` / `BigDecimal` …) | `D:` + value | `user(Sg[D:1.5])` |
+| Array / `List` | elements serialized recursively | `user(Sg[[N:1, N:2, N:3]])` |
+| Custom object | Jackson JSON | `user(Sg[{"id":1,"name":"Alice"}])` |
 
-### 参数选取方式
+The outer form depends on how many arguments take part: a **single value** is rendered `Sg[...]`, **two or more** values are rendered `[...]`, and a **no-argument** method yields `prefix()`. This keeps a single collection argument from colliding with several arguments: a lone `List[1,2]` gives `Sg[N:1,N:2]` while two arguments `(1,2)` give `[N:1,N:2]`. Arrays and `List` are equivalent in key form.
 
-优先级：`argSpel` > `argIndexes` > 全量参数
+Keys are capped at **256 characters**; longer keys have their argument part truncated and a hash suffix appended (`...#` + the first 16 hex characters of the SHA-256 digest) so truncated keys stay unique.
 
-| 方式 | 说明 | 示例 |
-|------|------|------|
-| `argSpel` | SpEL 表达式，从参数中选取值 | `argSpel = "#user.id"` → `user(Sg[N:1])` |
-| `argIndexes` | 按索引选取整个参数 | `argIndexes = {0, 2}` → `prefix([S:a, N:3])` |
-| 全量参数（默认） | 所有参数序列化 | `prefix([S:a, N:2, N:3])` |
+The complete key generation rules, argument encoding table, and edge-case behaviours are documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#缓存-key-生成规则).
 
-### 参数序列化
+## Cache Modes
 
-参数部分按"参与 key 生成的参数个数"决定外层形式：
+The component supports two modes, selected automatically from the classpath and configuration:
 
-- **单值选取（1 个参数）**：输出 `Sg[...]`，`Sg` 标识 single（单值）
-- **多值选取（≥2 个参数）**：输出 `[...]`
-- **无参数**：输出空（key 形如 `prefix()`）
+| Mode | Condition | Cross-instance invalidation | Use case |
+|---|---|---|---|
+| **L1 only** (Caffeine) | No Redis dependency, or `bing.cache.redis.enabled=false` | ❌ Current instance only | Single-instance deployment, or low consistency requirements |
+| **L1 + L2 two-level** | Redis dependency present and reachable | ✅ Redis Pub/Sub + version reconciliation | Multi-instance deployment needing cross-instance sharing and consistency |
 
-这样单值集合参数与多参数不会碰撞：单参数 `List[1,2]` 输出 `Sg[N:1,N:2]`，两参数 `(1,2)` 输出 `[N:1,N:2]`。
+> **Important limitation**: L1-only mode has no Redis Pub/Sub, so `evict()` / `@BingCacheEvict` can only clear the local cache of the **current JVM instance** and cannot notify others. A multi-instance deployment that relies on invalidation staying consistent must enable the L1+L2 mode.
 
-| 参数类型 | 元素序列化 | 单值示例 | 多值示例 |
-|----------|-----------|---------|---------|
-| null | `null` | `user(Sg[null])` | — |
-| 整数（Integer/Long/BigInteger 等） | `N:` + 值 | `user(Sg[N:42])` | `user([N:1, N:2])` |
-| 字符串 | `S:` + 值 | `user(Sg[S:42])` | `user([S:a, S:b])` |
-| Boolean | `B:` + 值 | `user(Sg[B:true])` | — |
-| Character | `C:` + 值 | `user(Sg[C:x])` | — |
-| 小数（Double/Float/BigDecimal 等） | `D:` + 值 | `user(Sg[D:1.5])` | — |
-| 数组 / List | 递归序列化元素 | `user(Sg[[N:1, N:2, N:3]])` | — |
-| 自定义对象 | Jackson JSON | `user(Sg[{"id":1,"name":"Alice"}])` | — |
+When L1 misses but L2 hits, the L2 value is backfilled into L1 **with the L2 entry's remaining TTL**, so an L1 entry never outlives its L2 counterpart (value and TTL are fetched in a single pipeline round trip). After 3 consecutive Redis failures the component degrades to L1-only mode; recovery requires 3 consecutive successes (anti-flapping protection).
 
-> **数组与 List 在 key 中形式相同**：两者都输出 `[N:1, N:2, N:3]` 形式，业务语义等价。
-> 例如 `Long[] {1,2,3}` 与 `List<Long> [1,2,3]` 会命中同一 key，无需区分。
->
-> **三种参数选取方式产出一致**：
-> - 单值场景：`argSpel="#id"`、`argIndexes={0}`、单参数默认，都输出 `prefix(Sg[N:1])`
-> - 多值场景：`argSpel="{#a,#b}"`、`argIndexes={0,1}`、多参数默认，都输出 `prefix([N:1,N:2])`
->
-> **argSpel 多值语法约定**：使用 SpEL 列表字面量 `{expr1, expr2, ...}` 表示多值选取，
-> 顶层逗号才作为参数分隔，嵌套 `()`/`[]`/`{}` 和字符串字面量中的逗号被忽略，
-> 如 `{#a, #b}`、`{new int[]{#a, #b}, #c}`。
-> 单元素花括号（如 `{#list}`）会被去壳，按单值处理，输出 `Sg[...]`。
->
-> 自定义对象使用 Jackson 序列化而非 `toString()`，确保不同实例和 JVM 重启后 key 一致。
-> Jackson 序列化失败时直接抛 `IllegalStateException`（而非降级为 `hashCode()`）。
+The full data flows, TTL backfill strategy, cross-instance invalidation, version reconciliation, and degradation/recovery mechanics are documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#缓存架构).
 
-### Key 长度限制
+## Configuration
 
-生成的 key 最大长度为 **256 个字符**。超过时自动截断参数部分并追加截断哈希后缀（`...#` + SHA-256 前 16 位十六进制字符），保证截断后的 key 仍然唯一。
-
-### 边界行为说明
-
-| 场景 | 当前行为 |
-|------|----------|
-| `argSpel` 返回 null | 参数部分序列化为字符串 `"null"`，例如 `@BingCache(keyPrefix = "user", argSpel = "#id")` 且 `id == null` 时，key 为 `user(null)` |
-| `argSpel` 非空且同时配置 `argIndexes` | `argSpel` 优先，`argIndexes` 被忽略，并输出一次 WARN 日志 |
-| `argSpel` 求值失败或 key 参数 Jackson 序列化失败 | 直接抛出异常，不执行原方法，也不会写缓存 |
-| 业务方法抛异常 | 异常直接向外抛出，不写缓存 |
-| 业务方法返回 null 且 `cacheNullValue = false` | 不写缓存，后续调用仍会执行原方法 |
-| 业务方法返回 null 且 `cacheNullValue = true` | 写入 L1 null 占位符，后续本实例命中后还原为 null 返回；NullValue 不写入 L2 Redis |
-| L2 命中但 TTL 查询返回 `-2` 或 `0` | 跳过 L1 回填，避免创建已经过期或即将过期的本地脏数据 |
-| 单 key `evict()` / `@BingCacheEvict(allEntries = false)` 或 `@BingCacheEvict(cacheName = "user", allEntries = false)` | 仅清除当前实例 L1 和 Redis L2 中的这个完整 key，并通过 Redis Pub/Sub 通知其他实例清除同一个 key；**即使配置了 `cacheName`，也不递增 cacheName/group/全局版本号，因此不会触发版本对账去清空同 cacheName 下的所有缓存**。若 Pub/Sub 丢失，只能依赖 `l1-max-ttl` 等待其他实例 L1 中该 key 过期 |
-| `clear()` / `clearByPrefix()` / `clearByGroup()` / `@BingCacheEvict(allEntries = true)` | 清除当前实例缓存并发布 Pub/Sub；在二级缓存模式下递增版本号（`clear`→全局版本、`clearByPrefix`→cacheName 版本、`clearByGroup`→group 版本），可由版本对账补偿 Pub/Sub 丢失 |
-| 参数序列化值恰好含 `(Sg[` 或 `([` 子串 + 该方法声明 `maxSize > 0` | L1 按前缀限容路由会误判 prefix（启发式 `lastIndexOf` 反推），条目可能落到独立的畸形 prefix 缓存实例，`clearByPrefix(cacheName)` 无法清除它，只能由 `l1-max-ttl` 自然过期兜底。**触发概率极低**——参数值需恰好包含 `(Sg[` 或 `([` 这个特定子串组合 |
-
-## 缓存架构
-
-### 两种缓存模式
-
-#### L1 仅本地缓存（默认，无需 Redis）
-
-```
-请求 → @BingCache → L1(Caffeine) 命中?
-                       ├─ 是 → 返回缓存值
-                       └─ 否 → 执行方法 → 写入 L1 → 返回结果
-```
-
-适用场景：单实例部署，或对缓存一致性要求不高的场景。
-
-> **重要限制**：纯 L1 模式没有 Redis Pub/Sub，`evict()` / `@BingCacheEvict` 只能清除**当前 JVM 实例**的本地缓存，无法通知其他实例。多实例部署如果依赖缓存清除保持一致，必须启用 Redis 二级缓存模式。
-
-#### L1 + L2 二级缓存（需要 Redis）
-
-```
-请求 → @BingCache → L1(Caffeine) 命中?
-                       ├─ 是 → 返回缓存值
-                       └─ 否 → L2(Redis) 命中?
-                                    ├─ 是 → 回填 L1(携带剩余 TTL) → 返回缓存值
-                                    └─ 否 → 执行方法 → 写入 L1 + L2 → 返回结果
-```
-
-适用场景：多实例部署，需要跨实例共享缓存和缓存一致性。
-
-### L2 回填 L1 的 TTL 策略
-
-L1 未命中但 L2 命中时，L2 的值会回填到 L1。回填时通过 Redis `TTL` 命令获取 L2 的剩余过期时间：
-
-- **remainingTtl > 0**：使用剩余 TTL 回填 L1
-- **remainingTtl == -1**：L2 永不过期，L1 也永不过期
-- **remainingTtl == -2 或 0**：L2 中 key 已不存在或即将过期，**跳过回填**，避免在 L1 创建永不过期的脏数据
-
-### 跨实例缓存失效（Redis Pub/Sub）
-
-> **前提：必须启用 Redis 二级缓存模式。** Pub/Sub 是 Redis 提供的消息通道能力；没有 Redis 依赖、Redis 连接不可用，或 `bing.cache.redis.enabled=false` 时，组件会退化为纯 L1 模式，此时 `evict()` / `@BingCacheEvict` 只影响当前实例，不具备跨实例失效能力。
-
-多实例部署时，任一实例执行 `@BingCacheEvict` 触发的失效操作会通过 Redis Pub/Sub 广播到其他实例：
-
-```
-实例 A: @BingCacheEvict → 清除 L2 + 清除 L1 → 发布 Pub/Sub 消息
-实例 B: 收到 Pub/Sub 消息 → 清除本地 L1 缓存
-实例 C: 收到 Pub/Sub 消息 → 清除本地 L1 缓存
-```
-
-- 消息包含 `instanceId`，各实例自动过滤自己发出的消息（自发自滤）
-- Pub/Sub 是 fire-and-forget 模式，不保证消息送达；`RedisMessageListenerContainer` 会自动重连
-- 频道名称默认 `bing-cache:invalidation`，可通过配置修改
-
-### 版本对账机制
-
-作为 Pub/Sub 消息丢失的补偿，组件提供版本对账机制：
-
-1. **版本号存储**：Redis 中维护每个 cacheName / group 的版本号
-   - cacheName 版本：`bing-cache:__version__:{cacheName}`
-   - 全局版本：`bing-cache:__version__:__all__`
-   - group 版本：`bing-cache:__version__:__group__:{group}`
-   - `clear()` 递增全局版本号；`clearByPrefix(prefix)` 递增对应 cacheName 的版本号；`clearByGroup(group)` 递增对应 group 的版本号
-   - **单 key `evict(key)` 不递增版本号**（见下方"对账范围限制"）
-
-2. **定时对账**：`CacheReconciliationService` 每隔 `interval` 秒检查版本号变化
-   - 发现全局版本变化 → 清空所有 L1 缓存
-   - 发现 cacheName 版本变化 → 按前缀清空 L1 缓存
-   - 发现 group 版本变化 → 按 group 清空 L1 缓存
-   - 版本无变化 → 不做任何操作
-   - 服务启动后立即执行首次对账（initialDelay=0）
-
-3. **调优建议**：
-   - `interval` 越小，一致性越好，但 Redis 开销越大（每次对账 N 次 `GET`，N = 活跃 cacheName 数量）
-   - 默认 30 秒适合大多数场景；一致性要求高可缩短到 10 秒
-   - 可配合 `l1-max-ttl` 使用，作为双重保障
-
-4. **对账范围限制（重要）**：
-   - 对账补偿 `clear()`、`clearByPrefix(prefix)` 和 `clearByGroup(group)` 的 Pub/Sub 丢失，因为这三类操作会递增版本号。
-   - **单 key `evict(key)` 的 Pub/Sub 丢失无法通过对账补偿**。原因：单 key evict 若按 key 写版本号，Redis 中会产生与业务 key 数量等量的 version 键，无限膨胀。
-   - 因此单 key evict 的跨实例失效完全依赖 Pub/Sub 实时送达；若 Pub/Sub 丢失，受影响实例只能通过 `l1-max-ttl` 自然过期兜底。
-   - 对一致性要求高的单 key 场景，建议：
-     - 设置合理的 `l1-max-ttl`（如 300 秒）作为兜底
-     - 或改用 `@BingCacheEvict(allEntries = true)` 触发 `clearByPrefix` / `clearByGroup`，享受对账补偿
-
-### Redis 降级与恢复
-
-当 Redis 连续操作失败达到 3 次时，输出 WARN 级别降级日志：
-
-```
-WARN  Bing Cache: Redis L2 cache has failed 3 consecutive times, degraded to L1-only mode. Check Redis connectivity.
-```
-
-Redis 恢复正常后：
-
-1. 输出 INFO 级别恢复日志：
-   ```
-   INFO  Bing Cache: Redis L2 cache has recovered from degradation
-   ```
-
-2. **L1 脏数据处理策略**：
-   - 对账启用（默认）：不立即全量清空 L1，由对账服务在下一个周期按 cacheName 粒度清理，避免恢复瞬间大量回源
-   - 对账禁用：立即全量清空 L1，防止 Redis 恢复后脏数据持续暴露
-
-降级期间，所有 L2 操作静默失败，缓存自动退化为纯 L1 模式，不影响业务正常运行。
-
-**Flapping 保护**：降级状态下需**连续 3 次成功**操作才判定 Redis 真正恢复并触发恢复回调。期间任何一次失败都会重置成功计数器。这避免了 Redis 在可用/不可用之间快速抖动时反复触发 `recoveryCallback` 清空 L1、引发缓存雪崩。与降级阈值的 3 次失败形成对称设计。
-
-## 配置属性
-
-通过 `application.yml` 配置，前缀为 `bing.cache`：
+Configure via `application.yml` under the `bing.cache` prefix:
 
 ```yaml
 bing:
   cache:
     caffeine:
-      max-size: 5000                    # 全局共享 Caffeine 实例的最大条目数（默认 5000；@BingCache(maxSize=0) 的条目使用此池子）
-      l1-max-ttl: 0                     # L1 最大存活秒数，0 表示不限制（默认 0；L1+L2 模式下 0 会自动兜底为 300）
+      max-size: 5000                    # Max entries in the shared Caffeine instance (default 5000; used by @BingCache(maxSize=0) entries)
+      l1-max-ttl: 0                     # Max L1 entry lifetime in seconds; 0 = unlimited (default 0; auto-falls back to 300 in L1+L2 mode)
     redis:
-      enabled: true                     # 是否启用 L2 Redis 缓存（默认 true）
-      key-prefix: "bing-cache:"         # Redis key 前缀（默认 bing-cache:）
-      channel-name: "bing-cache:invalidation"  # Pub/Sub 频道名称（默认 bing-cache:invalidation）
-      scan-count: 1000                 # Redis SCAN count hint（默认 1000）
-      delete-batch-size: 500           # Redis 批量删除每批 key 数（默认 500）
-      use-unlink: true                 # 优先使用 UNLINK 异步删除，失败自动降级 DEL（默认 true）
-      failure-log-interval: 30         # Redis 降级期间失败日志限流间隔秒数（默认 30）
+      enabled: true                     # Enable the L2 Redis cache (default true)
+      key-prefix: "bing-cache:"         # Redis key prefix (default bing-cache:)
+      channel-name: "bing-cache:invalidation"  # Pub/Sub channel name (default bing-cache:invalidation)
+      scan-count: 1000                 # Redis SCAN count hint (default 1000)
+      delete-batch-size: 500           # Keys deleted per batch when clearing (default 500)
+      use-unlink: true                 # Prefer async UNLINK, fall back to DEL (default true)
+      failure-log-interval: 30         # Throttle interval for repeated failure logs while degraded (default 30)
     reconciliation:
-      enabled: true                     # 是否启用版本对账（默认 true）
-      interval: 30                      # 对账间隔秒数（默认 30）
+      enabled: true                     # Enable version reconciliation (default true)
+      interval: 30                      # Reconciliation interval in seconds (default 30)
 ```
 
-### 配置说明
+| Property | Default | Description |
+|---|---|---|
+| `bing.cache.caffeine.max-size` | `5000` | Max entries in the shared Caffeine instance. Applies only to caches with no declared `maxSize` (or `maxSize=0`); when an annotation declares `maxSize > 0` that prefix owns a separate Caffeine instance sized by the annotation |
+| `bing.cache.caffeine.l1-max-ttl` | `0` | Max L1 entry lifetime in seconds; `0` means unlimited. Once set, no L1 entry outlives this value — the backstop for lost Pub/Sub messages or an unavailable Redis. **In L1+L2 mode, leaving it at `0` makes the component fall back to 300 seconds** (because lost Pub/Sub for single-key evict cannot be compensated by reconciliation); in L1-only mode `0` truly means unlimited |
+| `bing.cache.redis.enabled` | `true` | Enable the L2 Redis cache. Only effective when the Redis dependency is on the classpath and reachable; cross-instance invalidation for `evict()` / `@BingCacheEvict` relies on Redis Pub/Sub in this mode |
+| `bing.cache.redis.key-prefix` | `bing-cache:` | Prefix for cache keys in Redis, for namespace isolation |
+| `bing.cache.redis.channel-name` | `bing-cache:invalidation` | Pub/Sub channel for invalidation notifications; only used when the L2 Redis cache is enabled |
+| `bing.cache.redis.scan-count` | `1000` | Redis SCAN count hint used when `clear()` / `clearByPrefix()` scan keys |
+| `bing.cache.redis.delete-batch-size` | `500` | Keys deleted per batch when clearing Redis, avoiding one huge delete |
+| `bing.cache.redis.use-unlink` | `true` | Prefer async `UNLINK` when clearing Redis keys; on UNLINK failure the current batch and all later batches in the same call fall back to `DEL`; a DEL failure aborts the clear and records a degradation (same path as L1 degradation) |
+| `bing.cache.redis.failure-log-interval` | `30` | Minimum interval in seconds between repeated failure logs while Redis is degraded |
+| `bing.cache.reconciliation.enabled` | `true` | Enable version reconciliation to compensate for lost Pub/Sub messages |
+| `bing.cache.reconciliation.interval` | `30` | Reconciliation interval in seconds, valid range 1–86400 (24 hours); startup validation fails outside this range |
 
-| 属性 | 默认值 | 说明 |
-|------|--------|------|
-| `bing.cache.caffeine.max-size` | `5000` | 全局共享 Caffeine 实例的最大条目数。仅对未声明 `maxSize`（或 `maxSize=0`）的缓存生效；注解声明的 `maxSize > 0` 时该前缀拥有独立的 Caffeine 实例，容量以注解为准 |
-| `bing.cache.caffeine.l1-max-ttl` | `0` | L1 最大存活秒数，0 表示不限制。设置后所有 L1 条目过期时间不超过该值，作为 Pub/Sub 丢失或 Redis 不可用时的兜底保障。**L1+L2 模式下若保持 0，组件会自动使用 300 秒作为兜底默认值**（因单 key evict 的 Pub/Sub 丢失无法通过对账补偿）；纯 L1 模式下 0 即不限制 |
-| `bing.cache.redis.enabled` | `true` | 是否启用 L2 Redis 缓存。仅在 classpath 存在 Redis 依赖且连接可用时生效；跨实例 `evict()` / `@BingCacheEvict` 失效通知依赖该模式下的 Redis Pub/Sub |
-| `bing.cache.redis.key-prefix` | `bing-cache:` | Redis 中缓存 key 的前缀，用于命名空间隔离 |
-| `bing.cache.redis.channel-name` | `bing-cache:invalidation` | 缓存失效通知的 Redis Pub/Sub 频道名称，仅在启用 L2 Redis 缓存时生效 |
-| `bing.cache.redis.scan-count` | `1000` | Redis SCAN count hint，用于 `clear()` / `clearByPrefix()` 扫描 key |
-| `bing.cache.redis.delete-batch-size` | `500` | Redis 清理时每批删除 key 数量，避免一次性删除过多 key |
-| `bing.cache.redis.use-unlink` | `true` | 清理 Redis key 时优先使用 `UNLINK` 异步删除；UNLINK 失败时当前批次及后续批次自动降级为 `DEL`；DEL 失败时清理中断并触发降级记录（与 L1 降级流程一致） |
-| `bing.cache.redis.failure-log-interval` | `30` | Redis 降级期间重复失败日志的最小输出间隔，单位秒 |
-| `bing.cache.reconciliation.enabled` | `true` | 是否启用版本对账，补偿 Pub/Sub 消息丢失 |
-| `bing.cache.reconciliation.interval` | `30` | 版本对账间隔秒数，取值范围 1~86400（24 小时），超出范围启动时校验失败 |
+### Enabling the L2 Redis cache
 
-### 启用 L2 Redis 缓存
-
-只需确保项目中引入了 `spring-boot-starter-data-redis` 依赖并配置了 Redis 连接：
+Make sure the project depends on `spring-boot-starter-data-redis` and configure the Redis connection:
 
 ```xml
-<!-- 使用者项目 pom.xml -->
+<!-- consumer project pom.xml -->
 <dependency>
   <groupId>org.springframework.boot</groupId>
   <artifactId>spring-boot-starter-data-redis</artifactId>
@@ -684,11 +542,9 @@ spring:
       port: 6379
 ```
 
-`bing.cache.redis.enabled` 默认为 `true`，只要 Redis 连接可用，自动启用 L1+L2 二级缓存。
+`bing.cache.redis.enabled` defaults to `true`, so L1+L2 mode turns on automatically once Redis is reachable.
 
-### 禁用 L2 Redis 缓存
-
-即使项目中引入了 Redis 依赖，也可以通过配置显式禁用 L2：
+### Disabling the L2 Redis cache
 
 ```yaml
 bing:
@@ -697,36 +553,36 @@ bing:
       enabled: false
 ```
 
-此时回退为纯 L1 本地缓存模式。
+The component falls back to L1-only mode.
 
-### 无 Redis 的项目
+### Projects without Redis
 
-如果项目 classpath 中没有 `spring-boot-starter-data-redis`，组件自动以纯 L1 模式运行，无需任何额外配置。`spring-boot-starter-data-redis` 的 scope 为 `provided`，由使用者按需引入。
+Without `spring-boot-starter-data-redis` on the classpath the component runs in L1-only mode with no extra configuration. Its scope is `provided`, so consumers add it only if they want L2.
 
-## 手动管理缓存
+## Manual Cache Management
 
-注入 `CacheManager` 接口可手动管理缓存：
+Inject the `CacheManager` interface to manage caches by hand:
 
 ```java
 @Resource
 private CacheManager cacheManager;
 
-// 清除指定 key 的缓存
+// Clear a specific key
 cacheManager.evict("user(Sg[N:1])");
 
-// 清除指定 cacheName 下的所有缓存（精确匹配 "user(" 前缀，不会误删 "userDetail" 等）
+// Clear every entry under a cache name (matches the exact "user(" prefix, so "userDetail" is untouched)
 cacheManager.clearByPrefix("user");
 
-// 清除指定分组下的所有缓存（匹配 "user:" 开头的整个命名空间）
+// Clear every entry under a group (matches the whole "user:" namespace)
 cacheManager.clearByGroup("user");
 
-// 清空所有缓存
+// Clear everything
 cacheManager.clear();
 ```
 
-> 手动 evict 时，key 必须与 `CacheKeyGenerator` 生成的 key 完全一致。建议优先使用 `@BingCacheEvict` 注解方式。
+> When evicting manually, the key must match exactly what `CacheKeyGenerator` produces. Prefer the `@BingCacheEvict` annotation.
 
-### 通过接口手动清缓存
+### Exposing a manual clear endpoint
 
 ```java
 @RestController
@@ -750,9 +606,9 @@ public class CacheController {
 }
 ```
 
-## 日志与调试
+## Logging and Debugging
 
-开启 DEBUG 日志可查看缓存命中情况：
+Enable DEBUG logging to see cache hits:
 
 ```yaml
 logging:
@@ -760,65 +616,65 @@ logging:
     com.bing.cache: DEBUG
 ```
 
-日志分两层：**切面层**（`CacheAspect` / `CacheEvictAspect`）在纯 L1 和 L1+L2 两种模式下都会输出；**二级缓存层**（`CompositeCacheManager` / `RedisCacheManager`）仅在 L1+L2 模式下额外输出。
+Logs come in two layers: the **aspect layer** (`CacheAspect` / `CacheEvictAspect`) logs in both L1-only and L1+L2 mode; the **two-level cache layer** (`CompositeCacheManager` / `RedisCacheManager`) logs additionally in L1+L2 mode.
 
-切面层日志（两种模式都会输出）：
-
-```
-DEBUG Cache hit: user(Sg[N:1])                     # 缓存命中
-DEBUG Cache hit (null sentinel): user(Sg[N:999])   # 命中 null 占位符（cacheNullValue=true）
-DEBUG Cache miss: user(Sg[N:1])                    # 缓存未命中
-DEBUG Cache put: user(Sg[N:1])                    # 缓存写入
-DEBUG Cache put (null value): user(Sg[N:999])      # null 值缓存写入
-DEBUG Cache skip (null result): user(Sg[N:999])    # null 结果跳过缓存
-DEBUG Cache evict: user(Sg[N:1])                   # 单 key 清除
-DEBUG Cache clear by prefix: user                  # 按前缀清除（allEntries + cacheName/keyPrefix）
-DEBUG Cache clear by group: admin                  # 按 group 清除（allEntries + 仅 group）
-DEBUG Cache clear all entries                      # 全局清空（allEntries，无 cacheName/keyPrefix/group）
-```
-
-二级缓存层日志（仅 L1+L2 模式额外输出）：
+Aspect layer (both modes):
 
 ```
-DEBUG L1 cache hit: user(Sg[N:1])                     # L1 命中
-DEBUG L2 cache hit, backfilling L1: user(Sg[N:1])     # L2 命中并回填 L1
-DEBUG L1+L2 cache miss: user(Sg[N:1])                 # L1 和 L2 均未命中
-DEBUG Redis cache hit: bing-cache:user(Sg[N:1])       # Redis 命中
-DEBUG Cache put (L1+L2): user(Sg[N:1])                # L1+L2 同时写入
-DEBUG Cache evict (L2+L1+pub): user(Sg[N:1])          # L2+L1 清除并发布 Pub/Sub
-DEBUG Cache clear by prefix (L2+L1+pub): user         # 按前缀清除（L2+L1+Pub/Sub）
-DEBUG Cache clear (L2+L1+pub)                         # 全局清空（L2+L1+Pub/Sub）
+DEBUG Cache hit: user(Sg[N:1])                     # cache hit
+DEBUG Cache hit (null sentinel): user(Sg[N:999])   # hit the null placeholder (cacheNullValue=true)
+DEBUG Cache miss: user(Sg[N:1])                    # cache miss
+DEBUG Cache put: user(Sg[N:1])                     # cache write
+DEBUG Cache put (null value): user(Sg[N:999])      # null value cached
+DEBUG Cache skip (null result): user(Sg[N:999])    # null result skipped
+DEBUG Cache evict: user(Sg[N:1])                   # single-key invalidation
+DEBUG Cache clear by prefix: user                  # clear by prefix (allEntries + cacheName/keyPrefix)
+DEBUG Cache clear by group: admin                  # clear by group (allEntries + group only)
+DEBUG Cache clear all entries                      # global clear (allEntries, no cacheName/keyPrefix/group)
 ```
 
-Redis 降级与恢复：
+Two-level cache layer (L1+L2 only):
 
 ```
-WARN  Bing Cache: Redis L2 cache has failed 3 consecutive times, degraded to L1-only mode. Check Redis connectivity.  # 连续失败 3 次降级
-WARN  Bing Cache: Redis L2 cache still degraded. ...                                                                  # 降级期间按 failure-log-interval 限流的摘要日志
-INFO  Bing Cache: Redis L2 cache has recovered from degradation                                                        # 连续成功 3 次恢复
+DEBUG L1 cache hit: user(Sg[N:1])                     # L1 hit
+DEBUG L2 cache hit, backfilling L1: user(Sg[N:1])     # L2 hit, backfilling L1
+DEBUG L1+L2 cache miss: user(Sg[N:1])                 # both L1 and L2 missed
+DEBUG Redis cache hit: bing-cache:user(Sg[N:1])       # Redis hit
+DEBUG Cache put (L1+L2): user(Sg[N:1])                # written to both levels
+DEBUG Cache evict (L2+L1+pub): user(Sg[N:1])          # L2 + L1 cleared and Pub/Sub published
+DEBUG Cache clear by prefix (L2+L1+pub): user         # clear by prefix (L2 + L1 + Pub/Sub)
+DEBUG Cache clear (L2+L1+pub)                         # global clear (L2 + L1 + Pub/Sub)
 ```
 
-## 注意事项
+Redis degradation and recovery:
 
-1. **自调用失效**：同类内部方法调用不会触发 AOP 代理，缓存注解不生效。需通过 Spring 注入的 Bean 调用。
+```
+WARN  Bing Cache: Redis L2 cache has failed 3 consecutive times, degraded to L1-only mode. Check Redis connectivity.  # degraded after 3 failures
+WARN  Bing Cache: Redis L2 cache still degraded. ...                                                                  # summary log, throttled by failure-log-interval
+INFO  Bing Cache: Redis L2 cache has recovered from degradation                                                        # recovered after 3 successes
+```
 
-2. **Redis Pub/Sub 依赖 Redis 二级缓存模式**：跨实例缓存失效通知使用 Redis Pub/Sub 实现。没有 Redis 依赖、Redis 连接不可用，或 `bing.cache.redis.enabled=false` 时，组件以纯 L1 模式运行，`evict()` / `@BingCacheEvict` 只能清除当前 JVM 实例的本地缓存，不能通知其他实例。
+## Caveats
 
-3. **Redis Pub/Sub 不保证送达**：失效消息基于 Redis Pub/Sub 广播，属于 fire-and-forget 模式。极端情况下（如网络抖动），其他实例可能收不到失效通知，导致短时间内读到旧数据。**注意：版本对账机制只补偿 `clear()`、`clearByPrefix()` 和 `clearByGroup()` 的 Pub/Sub 丢失，单 key `evict()` 的丢失无法补偿**（详见"缓存架构 → 版本对账机制 → 对账范围限制"）。建议生产环境设置 `l1-max-ttl` 作为兜底。
+1. **Self-invocation does not work**: an internal call within the same class bypasses the AOP proxy, so cache annotations have no effect. Call through a Spring-injected bean.
 
-4. **适用场景**：本组件适用于读多写少、对缓存一致性要求为最终一致的业务场景（如字典数据、用户信息、配置信息等）。不适合频繁更新且要求强一致性的业务。
+2. **Cross-instance invalidation requires L1+L2 mode**: it is implemented with Redis Pub/Sub. Without a Redis dependency, with Redis unreachable, or with `bing.cache.redis.enabled=false`, the component runs L1-only and `evict()` / `@BingCacheEvict` clear only the current JVM instance.
 
-5. **多实例部署**：L1 本地缓存各实例独立，必须启用 Redis 二级缓存模式后，`@BingCacheEvict` 才会通过 Pub/Sub 通知其他实例清除本地缓存；通知存在毫秒级延迟。如需强一致，请直接查询数据库。
+3. **Pub/Sub delivery is not guaranteed**: invalidation messages are broadcast fire-and-forget. In the worst case (e.g. network jitter) other instances miss the notification and read stale data for a short while. **Note: version reconciliation only compensates lost Pub/Sub for `clear()`, `clearByPrefix()` and `clearByGroup()`; a lost single-key `evict()` cannot be compensated** (see [reconciliation scope limits](docs/ARCHITECTURE.md#对账范围限制重要)). Set `l1-max-ttl` as a backstop in production.
 
-6. **缓存 key 一致性**：手动 `evict()` 时，key 必须和自动生成的完全一致，可从 DEBUG 日志中获取。推荐使用 `@BingCacheEvict` 注解替代手动操作。
+4. **Suitable workloads**: this component targets read-heavy, eventually-consistent data (dictionaries, user profiles, configuration). It is not a fit for frequently updated data that requires strong consistency.
 
-7. **Redis 依赖可选**：`spring-boot-starter-data-redis` 的 scope 为 `provided`，由使用者项目按需引入。没有 Redis 依赖时，组件自动以纯 L1 模式运行。
+5. **Multi-instance deployment**: each instance has an independent L1. `@BingCacheEvict` only notifies other instances once L1+L2 mode is enabled, and delivery has millisecond-level latency. For strong consistency, query the database directly.
 
-8. **`allEntries` 清除范围**：`@BingCacheEvict(allEntries = true)` 配合 `cacheName` 或 `keyPrefix` 时，只清除该前缀下的缓存条目；仅指定 `group`（无 cacheName/keyPrefix）时按 group 清除；都不指定时才全局清空。
+6. **Manual key consistency**: a manual `evict()` key must match the generated one exactly; copy it from the DEBUG logs. Prefer `@BingCacheEvict` over manual calls.
 
-9. **`clearByPrefix` 精确匹配语义**：`cacheManager.clearByPrefix(prefix)` 内部匹配 `prefix + "("` 开头的 key，确保只清除指定 cacheName 的缓存，不会误删前缀相同的其他 cacheName（如 `clearByPrefix("user")` 不会误删 `userDetail` 的 key）。Redis SCAN 的 glob 结果会通过 `startsWith` 二次过滤，`prefix` 中的 `*`、`?` 等元字符被当作字面字符处理。
+7. **Redis is optional**: `spring-boot-starter-data-redis` has `provided` scope, so consumers add it when needed. Without it the component runs L1-only.
 
-10. **`@BingCacheEvict` 未指定 cacheName/keyPrefix 时会输出警告**：当 `@BingCacheEvict` 既没有设置 `cacheName` 也没有设置 `keyPrefix` 时，默认前缀为当前方法名（如 `updateUser`），而对应的 `@BingCache` 方法默认前缀是其方法名（如 `getUserById`），两者不匹配会导致 evict 静默失效。组件会输出 WARN 日志提醒：
+8. **Scope of `allEntries`**: `@BingCacheEvict(allEntries = true)` with a `cacheName` or `keyPrefix` clears only that prefix; with only a `group` it clears that group; with neither it clears everything.
+
+9. **`clearByPrefix` matches exactly**: internally it matches keys starting with `prefix + "("`, so `clearByPrefix("user")` never clears `userDetail`. Glob metacharacters (`*`, `?`, …) in `prefix` are treated literally — Redis SCAN results are re-filtered with `startsWith`.
+
+10. **A WARN when `@BingCacheEvict` sets neither cacheName nor keyPrefix**: the default prefix then becomes the evicting method's name (e.g. `updateUser`) while the `@BingCache` default prefix is its own method name (e.g. `getUserById`), so the keys do not match and the eviction silently misses. The component logs:
 
     ```
     WARN @BingCacheEvict on method 'updateUser' has no cacheName or keyPrefix set.
@@ -827,17 +683,17 @@ INFO  Bing Cache: Redis L2 cache has recovered from degradation                 
     Consider setting cacheName to match @BingCache.
     ```
 
-    建议：始终为 `@BingCacheEvict` 指定 `cacheName`，与对应的 `@BingCache` 保持一致。
+    Always give `@BingCacheEvict` a `cacheName` that matches its `@BingCache`.
 
-## 兼容性说明
+## Compatibility
 
-| 项目 | 支持情况 | 说明 |
-|------|----------|------|
-| JDK | Java 17+ | 发布产物使用 `--release 17` 编译，可在 JDK 17 及以上版本运行 |
-| Spring Boot | 3.x | 当前测试/依赖管理基线为 Spring Boot 3.5.13；面向 Spring Boot 3.x / Spring Framework 6.x / Jakarta 体系 |
-| Spring Boot 2.x | 不支持 | Spring Boot 2.x 仍以 `javax.*` 体系为主，与当前模块使用的 Spring Boot 3 / Jakarta 依赖体系不匹配 |
+| Item | Supported | Notes |
+|---|---|---|
+| JDK | Java 17+ | Artifacts are compiled with `--release 17` and run on JDK 17 and above |
+| Spring Boot | 3.x | Current test/dependency baseline is Spring Boot 3.5.13; targets Spring Boot 3.x / Spring Framework 6.x / Jakarta |
+| Spring Boot 2.x | Not supported | Spring Boot 2.x is still on `javax.*` and does not match the Spring Boot 3 / Jakarta dependencies used here |
 
-本地可通过 Maven profiles 验证不同 Spring Boot 3.x 基线：
+Other Spring Boot 3.x baselines can be verified locally via Maven profiles:
 
 ```bash
 mvn clean test -Pboot-3.2
@@ -845,49 +701,49 @@ mvn clean test -Pboot-3.3
 mvn clean test -Pboot-3.5
 ```
 
-## 技术栈
+## Tech Stack
 
 - Java 17+
-- Spring Boot 3.x（当前测试/依赖管理基线：3.5.13）
-- Caffeine（由 Spring Boot BOM 管理版本）
-- Spring Data Redis（provided scope，使用者提供）
-- AspectJ（由 Spring Boot BOM 管理版本）
-- Jackson（key 生成 + Redis 序列化）
-- JUnit 5 + Mockito（单元测试）
-- Testcontainers（集成测试）
+- Spring Boot 3.x (current test/dependency baseline: 3.5.13)
+- Caffeine (version managed by the Spring Boot BOM)
+- Spring Data Redis (provided scope, supplied by the consumer)
+- AspectJ (version managed by the Spring Boot BOM)
+- Jackson (key generation + Redis serialization)
+- JUnit 5 + Mockito (unit tests)
+- Testcontainers (integration tests)
 
-## 仓库结构与构建
+## Repository Layout and Build
 
-本仓库使用 Maven 多模块结构：
+A Maven multi-module project:
 
 ```text
 bing-cache/
-├── pom.xml              # 父 POM / reactor 聚合工程，统一管理版本、依赖和插件
-├── bing-cache-core/     # 核心 starter 源码与单元测试，发布 artifactId 仍为 bing-cache
+├── pom.xml              # Parent POM / reactor aggregator: versions, dependencies, plugins
+├── bing-cache-core/     # Starter sources and unit tests; the published artifactId is still bing-cache
 │   ├── src/main/java/com/bing/cache/
 │   └── src/test/java/com/bing/cache/
-└── bing-cache-test/     # 集成测试模块，依赖当前 reactor 中的 bing-cache
+└── bing-cache-test/     # Integration test module, depends on bing-cache from this reactor
     ├── src/main/java/com/example/demo/
     └── src/test/java/com/example/demo/
 ```
 
-对外依赖坐标保持不变：`cn.com.bingbing:bing-cache:1.1-SNAPSHOT`。业务项目继续依赖该坐标即可，不需要依赖 `bing-cache-core` 这个目录名。
+The published coordinates stay `cn.com.bingbing:bing-cache:1.1-SNAPSHOT`. Business projects keep depending on that coordinate; nobody needs to depend on the `bing-cache-core` directory name.
 
-常用构建命令：
+Common commands:
 
 ```bash
-# 全量构建
+# Full build
 mvn clean verify
 
-# 安装父 POM 和所有模块到本地 Maven 仓库
+# Install the parent POM and all modules into the local Maven repository
 mvn clean install
 
-# 推荐：只安装业务使用所需的 parent + core 到本地 Maven 仓库
+# Recommended: install only the parent + core that consumers need
 mvn clean install -pl bing-cache-core -am
 
-# 只验证核心模块
+# Verify the core module only
 mvn -pl bing-cache-core -am verify
 
-# 构建集成测试模块，并自动构建核心依赖
+# Build the integration test module, building its core dependency automatically
 mvn -pl bing-cache-test -am verify
 ```
