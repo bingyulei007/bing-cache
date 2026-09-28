@@ -1,8 +1,8 @@
 # Bing Cache 实现细节
 
-[English](../README.md) | [中文](../README_CN.md)
+[English](README.md) | [中文](README_CN.md)
 
-本文档收录缓存 Key 生成规则与缓存架构实现细节。日常使用（依赖引入、注解用法、配置项）见 [README_CN.md](../README_CN.md)。
+本文档收录缓存 Key 生成规则与缓存架构实现细节。日常使用（依赖引入、注解用法、配置项）见 [README_CN.md](README_CN.md)。
 
 ## 目录
 

@@ -4,7 +4,7 @@
 
 基于 Spring AOP 的方法级缓存组件，通过注解实现透明的数据缓存，支持 L1 本地缓存（Caffeine）和 L2 分布式缓存（Redis）两级架构。
 
-> **实现细节**（缓存 Key 生成规则、对账机制、降级与恢复等内部机制）见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+> **实现细节**（缓存 Key 生成规则、对账机制、降级与恢复等内部机制）见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 
 ## 特性
 
@@ -34,7 +34,7 @@ Bing Cache 采用 **最终一致性** 模型，不同失效操作的一致性强
 **实践建议**：
 - 对一致性要求高的单 key 更新场景（如"更新用户手机号"），将 `l1-max-ttl` 调到可接受的脏数据窗口（如 60-120 秒）。
 - 若 300 秒脏数据窗口不可接受，考虑用 `allEntries=true` 批量清除（走版本对账，一致性更强但清除范围更大）。
-- 单 key evict 的详细机制见 [版本对账机制 - 对账范围限制](docs/ARCHITECTURE.md#对账范围限制重要)。
+- 单 key evict 的详细机制见 [版本对账机制 - 对账范围限制](ARCHITECTURE.md#对账范围限制重要)。
 
 ## 快速开始
 
@@ -458,7 +458,7 @@ public class UserService {
 
 L1 未命中但 L2 命中时，L2 的值会携带**剩余 TTL** 回填 L1，避免 L1 条目比 L2 更长寿（值与 TTL 通过同一次 pipeline 往返取得）。Redis 连续失败 3 次会自动降级为纯 L1 模式，恢复需连续成功 3 次（防抖保护）。
 
-两种模式的数据流、TTL 回填策略、跨实例失效、版本对账与降级恢复的完整机制见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+两种模式的数据流、TTL 回填策略、跨实例失效、版本对账与降级恢复的完整机制见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 
 ## 配置属性
 
@@ -640,7 +640,7 @@ INFO  Bing Cache: Redis L2 cache has recovered from degradation                 
 
 2. **Redis Pub/Sub 依赖 Redis 二级缓存模式**：跨实例缓存失效通知使用 Redis Pub/Sub 实现。没有 Redis 依赖、Redis 连接不可用，或 `bing.cache.redis.enabled=false` 时，组件以纯 L1 模式运行，`evict()` / `@BingCacheEvict` 只能清除当前 JVM 实例的本地缓存，不能通知其他实例。
 
-3. **Redis Pub/Sub 不保证送达**：失效消息基于 Redis Pub/Sub 广播，属于 fire-and-forget 模式。极端情况下（如网络抖动），其他实例可能收不到失效通知，导致短时间内读到旧数据。**注意：版本对账机制只补偿 `clear()`、`clearByPrefix()` 和 `clearByGroup()` 的 Pub/Sub 丢失，单 key `evict()` 的丢失无法补偿**（详见 [对账范围限制](docs/ARCHITECTURE.md#对账范围限制重要)）。建议生产环境设置 `l1-max-ttl` 作为兜底。
+3. **Redis Pub/Sub 不保证送达**：失效消息基于 Redis Pub/Sub 广播，属于 fire-and-forget 模式。极端情况下（如网络抖动），其他实例可能收不到失效通知，导致短时间内读到旧数据。**注意：版本对账机制只补偿 `clear()`、`clearByPrefix()` 和 `clearByGroup()` 的 Pub/Sub 丢失，单 key `evict()` 的丢失无法补偿**（详见 [对账范围限制](ARCHITECTURE.md#对账范围限制重要)）。建议生产环境设置 `l1-max-ttl` 作为兜底。
 
 4. **适用场景**：本组件适用于读多写少、对缓存一致性要求为最终一致的业务场景（如字典数据、用户信息、配置信息等）。不适合频繁更新且要求强一致性的业务。
 

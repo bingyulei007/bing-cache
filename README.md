@@ -4,7 +4,7 @@
 
 A method-level cache component built on Spring AOP. Transparent caching through annotations, with a two-level architecture: L1 local cache (Caffeine) and L2 distributed cache (Redis).
 
-> **Implementation details** (cache key format, reconciliation, degradation and recovery internals) live in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — Chinese only for now.
+> **Implementation details** (cache key format, reconciliation, degradation and recovery internals) live in [ARCHITECTURE.md](ARCHITECTURE.md) — Chinese only for now.
 
 ## Features
 
@@ -34,7 +34,7 @@ Bing Cache is **eventually consistent**, and different invalidation operations h
 **Recommendations**:
 - For single-key updates that demand strong consistency (e.g. "update a user's phone number"), lower `l1-max-ttl` to a dirty-data window you can accept (e.g. 60–120 seconds).
 - If a 300-second window is unacceptable, use `allEntries=true` bulk clearing instead — it goes through version reconciliation, which is stronger but clears a wider range.
-- The full mechanism is described in [reconciliation scope limits](docs/ARCHITECTURE.md#对账范围限制重要).
+- The full mechanism is described in [reconciliation scope limits](ARCHITECTURE.md#对账范围限制重要).
 
 ## Quick Start
 
@@ -467,7 +467,7 @@ The outer form depends on how many arguments take part: a **single value** is re
 
 Keys are capped at **256 characters**; longer keys have their argument part truncated and a hash suffix appended (`...#` + the first 16 hex characters of the SHA-256 digest) so truncated keys stay unique.
 
-The complete key generation rules, argument encoding table, and edge-case behaviours are documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#缓存-key-生成规则).
+The complete key generation rules, argument encoding table, and edge-case behaviours are documented in [ARCHITECTURE.md](ARCHITECTURE.md#缓存-key-生成规则).
 
 ## Cache Modes
 
@@ -482,7 +482,7 @@ The component supports two modes, selected automatically from the classpath and 
 
 When L1 misses but L2 hits, the L2 value is backfilled into L1 **with the L2 entry's remaining TTL**, so an L1 entry never outlives its L2 counterpart (value and TTL are fetched in a single pipeline round trip). After 3 consecutive Redis failures the component degrades to L1-only mode; recovery requires 3 consecutive successes (anti-flapping protection).
 
-The full data flows, TTL backfill strategy, cross-instance invalidation, version reconciliation, and degradation/recovery mechanics are documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#缓存架构).
+The full data flows, TTL backfill strategy, cross-instance invalidation, version reconciliation, and degradation/recovery mechanics are documented in [ARCHITECTURE.md](ARCHITECTURE.md#缓存架构).
 
 ## Configuration
 
@@ -660,7 +660,7 @@ INFO  Bing Cache: Redis L2 cache has recovered from degradation                 
 
 2. **Cross-instance invalidation requires L1+L2 mode**: it is implemented with Redis Pub/Sub. Without a Redis dependency, with Redis unreachable, or with `bing.cache.redis.enabled=false`, the component runs L1-only and `evict()` / `@BingCacheEvict` clear only the current JVM instance.
 
-3. **Pub/Sub delivery is not guaranteed**: invalidation messages are broadcast fire-and-forget. In the worst case (e.g. network jitter) other instances miss the notification and read stale data for a short while. **Note: version reconciliation only compensates lost Pub/Sub for `clear()`, `clearByPrefix()` and `clearByGroup()`; a lost single-key `evict()` cannot be compensated** (see [reconciliation scope limits](docs/ARCHITECTURE.md#对账范围限制重要)). Set `l1-max-ttl` as a backstop in production.
+3. **Pub/Sub delivery is not guaranteed**: invalidation messages are broadcast fire-and-forget. In the worst case (e.g. network jitter) other instances miss the notification and read stale data for a short while. **Note: version reconciliation only compensates lost Pub/Sub for `clear()`, `clearByPrefix()` and `clearByGroup()`; a lost single-key `evict()` cannot be compensated** (see [reconciliation scope limits](ARCHITECTURE.md#对账范围限制重要)). Set `l1-max-ttl` as a backstop in production.
 
 4. **Suitable workloads**: this component targets read-heavy, eventually-consistent data (dictionaries, user profiles, configuration). It is not a fit for frequently updated data that requires strong consistency.
 
